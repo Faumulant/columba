@@ -217,7 +217,7 @@ Add-Type -AssemblyName System.Drawing | Out-Null
 $f = New-Object System.Windows.Forms.Form
 $f.TopMost = $true
 $f.ShowInTaskbar = $false
-$f.Text = 'Drop'
+$f.Text = 'Columba'
 $f.Size = New-Object System.Drawing.Size(300, 100)
 $f.StartPosition = 'CenterScreen'
 $l = New-Object System.Windows.Forms.Label

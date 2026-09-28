@@ -36,10 +36,10 @@ const (
 
 // userscriptTemplate 生成给篡改猴的脚本；token/端口在生成时烧入。
 const userscriptTemplate = `// ==UserScript==
-// @name         Drop 发送
+// @name         Columba 发送
 // @namespace    drop.local
 // @version      1.0.0
-// @description  划选文字 / 右键媒体 / 当前页面 → 一键发送到 Drop 设备
+// @description  划选文字 / 右键媒体 / 当前页面 → 一键发送到 Columba 设备
 // @match        *://*/*
 // @connect      127.0.0.1
 // @connect      localhost
@@ -76,7 +76,7 @@ const userscriptTemplate = `// ==UserScript==
       if (!sel || sel === lastSel) { if (!sel) lastSel = ""; hide(); return; }
       lastSel = sel; hide();
       pill = document.createElement("div");
-      pill.textContent = "发送到 Drop";
+      pill.textContent = "发送到 Columba";
       pill.style.cssText = "position:fixed;z-index:2147483647;background:#2563eb;color:#fff;font-size:12px;padding:6px 12px;border-radius:99px;cursor:pointer;box-shadow:0 4px 14px rgba(37,99,235,.4);font-family:sans-serif;left:" + (e.clientX + 12) + "px;top:" + (e.clientY + 10) + "px";
       pill.onclick = ev => { ev.stopPropagation(); sendText(sel); lastSel = ""; hide(); };
       document.body.appendChild(pill);
