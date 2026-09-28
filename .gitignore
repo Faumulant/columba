@@ -1,0 +1,10 @@
+drop
+drop.exe
+*.test
+tmp/
+dist/
+drop-linux-*
+dropw.exe
+*.local
+*.exe~
+tmp_*.txt

@@ -1,0 +1,778 @@
+// Package ipc 提供面板与后台 daemon 之间的本地服务：
+// 仅监听 127.0.0.1，凭启动时生成的 token 鉴权。
+package ipc
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"drop/core/discover"
+	"drop/core/history"
+	"drop/core/identity"
+	"drop/core/protocol"
+	"drop/core/transfer"
+	"drop/platform"
+)
+
+const (
+	deviceLimit      = 3
+	ipcPreferredPort = 42709
+)
+
+// userscriptTemplate 生成给篡改猴的脚本；token/端口在生成时烧入。
+const userscriptTemplate = `// ==UserScript==
+// @name         Drop 发送
+// @namespace    drop.local
+// @version      1.0.0
+// @description  划选文字 / 右键媒体 / 当前页面 → 一键发送到 Drop 设备
+// @match        *://*/*
+// @connect      127.0.0.1
+// @connect      localhost
+// @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
+// @run-at       document-end
+// @updateURL    http://127.0.0.1:__PORT__/userscript.user.js?t=__TOKEN__
+// @downloadURL  http://127.0.0.1:__PORT__/userscript.user.js?t=__TOKEN__
+// ==/UserScript==
+(function () {
+  const API = "http://127.0.0.1:__PORT__";
+  const TOKEN = "__TOKEN__";
+  function sendText(text) {
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: API + "/api/send-text?t=" + TOKEN,
+      headers: { "Content-Type": "application/json" },
+      data: JSON.stringify({ text }),
+      onload: r => {
+        let ok = false, msg = r.statusText;
+        try { const d = JSON.parse(r.responseText); ok = !!d.ok; msg = d.message || ""; } catch (e) {}
+        flash(ok ? "✓ 已发送" : "✗ " + (msg || "发送失败"), !ok);
+      },
+      onerror: () => flash("✗ 无法连接 Drop 后台", true)
+    });
+  }
+  // 划选文字时浮现"发送到 Drop"按钮
+  let pill = null, lastSel = "";
+  function hide() { if (pill) { pill.remove(); pill = null; } }
+  document.addEventListener("mouseup", e => {
+    if (pill && pill.contains(e.target)) return;
+    setTimeout(() => {
+      const sel = (window.getSelection().toString() || "").trim();
+      if (!sel || sel === lastSel) { if (!sel) lastSel = ""; hide(); return; }
+      lastSel = sel; hide();
+      pill = document.createElement("div");
+      pill.textContent = "发送到 Drop";
+      pill.style.cssText = "position:fixed;z-index:2147483647;background:#2563eb;color:#fff;font-size:12px;padding:6px 12px;border-radius:99px;cursor:pointer;box-shadow:0 4px 14px rgba(37,99,235,.4);font-family:sans-serif;left:" + (e.clientX + 12) + "px;top:" + (e.clientY + 10) + "px";
+      pill.onclick = ev => { ev.stopPropagation(); sendText(sel); lastSel = ""; hide(); };
+      document.body.appendChild(pill);
+    }, 10);
+  });
+  function flash(text, err) {
+    const d = document.createElement("div");
+    d.textContent = text;
+    d.style.cssText = "position:fixed;z-index:2147483647;left:50%;top:18%;transform:translateX(-50%);background:" + (err ? "#7f1d1d" : "#111827") + ";color:#f9fafb;font-size:13px;padding:10px 16px;border-radius:12px;font-family:sans-serif;box-shadow:0 8px 26px rgba(0,0,0,.3)";
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 2600);
+  }
+  // 右键媒体记忆：在图片/视频上右键后，可从菜单发送其地址
+  let lastMedia = null;
+  document.addEventListener("contextmenu", e => {
+    const t = e.target && e.target.closest && e.target.closest("img,video");
+    lastMedia = t ? (t.currentSrc || t.src || "") : null;
+  }, true);
+  if (typeof GM_registerMenuCommand === "function") {
+    GM_registerMenuCommand("Drop：发送当前页面", () => sendText(location.href));
+    GM_registerMenuCommand("Drop：发送选中文本/剪贴板", () => {
+      const sel = (window.getSelection().toString() || "").trim();
+      if (sel) return sendText(sel);
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(t => { if (t.trim()) sendText(t.trim()); else flash("剪贴板为空", true); }).catch(() => flash("无法读取剪贴板（需浏览器授权）", true));
+      } else flash("剪贴板为空", true);
+    });
+    GM_registerMenuCommand("Drop：发送右键的图片/视频", () => {
+      if (lastMedia) sendText(lastMedia); else flash("请先在图片或视频上右键", true);
+    });
+  }
+})();`
+
+func (s *Server) userscript() string {
+	return strings.NewReplacer(
+		"__PORT__", fmt.Sprint(s.port),
+		"__TOKEN__", s.token,
+	).Replace(userscriptTemplate)
+}
+
+// Config 面板可修改的持久设置。
+type Config struct {
+	Target  string `json:"target"`
+	RecvDir string `json:"recv_dir"`
+}
+
+// Server 本地 IPC 服务。
+type Server struct {
+	id    *identity.Identity
+	trust *identity.TrustStore
+	recv  *transfer.Receiver
+	peers *discover.Tracker
+
+	cfgMu   sync.Mutex
+	cfg     Config
+	cfgPath string
+	token   string
+	port    int
+
+	// 收/发完成通知钩子（daemon 接线到系统通知）
+	NotifyFile      func(dir, peer, name string) // dir: send/recv
+	NotifyText      func(dir, peer, text string)
+	NotifyErr       func(title, msg string)
+	OnDeviceRemoved func(display string)
+
+	pairMu   sync.Mutex
+	pendName string
+	pendID   string
+	decision chan bool
+
+	probeMu   sync.Mutex
+	lastProbe time.Time
+	probeSeen map[string]time.Time
+}
+
+// New 创建服务（读取配置、生成 token），随后 SetReceiver 并 Start。
+func New(id *identity.Identity, trust *identity.TrustStore, peers *discover.Tracker) (*Server, error) {
+	s := &Server{
+		id:        id,
+		trust:     trust,
+		peers:     peers,
+		cfgPath:   filepath.Join(identity.AppDir(), "config.json"),
+		decision:  make(chan bool, 1),
+		probeSeen: map[string]time.Time{},
+	}
+	if raw, err := os.ReadFile(s.cfgPath); err == nil {
+		json.Unmarshal(raw, &s.cfg)
+	}
+	// token 持久化：重启后复用，面板/篡改猴脚本的地址永久有效
+	if raw, err := os.ReadFile(filepath.Join(identity.AppDir(), "ipc.json")); err == nil {
+		var prev struct {
+			Token string `json:"token"`
+		}
+		if json.Unmarshal(raw, &prev) == nil && prev.Token != "" {
+			s.token = prev.Token
+		}
+	}
+	if s.token == "" {
+		tok := make([]byte, 32)
+		if _, err := rand.Read(tok); err != nil {
+			return nil, err
+		}
+		s.token = hex.EncodeToString(tok)
+	}
+	return s, nil
+}
+
+// SetReceiver 挂载接收端（配对确认经面板裁决）。
+func (s *Server) SetReceiver(r *transfer.Receiver) { s.recv = r }
+
+// RecvDir 当前接收目录（面板设置优先）。
+func (s *Server) RecvDir() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.cfg.RecvDir
+}
+
+// Target 当前选中的发送目标。
+func (s *Server) Target() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.cfg.Target
+}
+
+// Start 启动本地服务，返回面板访问 URL。
+// 优先绑定固定端口（篡改猴脚本的自动更新依赖稳定地址），被占时退随机端口。
+func (s *Server) Start(ctx context.Context) (string, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ipcPreferredPort)))
+	if err != nil {
+		ln, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return "", err
+		}
+	}
+	s.port = ln.Addr().(*net.TCPAddr).Port
+	if err := s.saveIPC(); err != nil {
+		return "", err
+	}
+	srv := &http.Server{Handler: s, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
+			log.Println("IPC 服务异常:", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+	return fmt.Sprintf("http://127.0.0.1:%d/panel?t=%s", s.port, s.token), nil
+}
+
+func (s *Server) saveIPC() error {
+	b, _ := json.MarshalIndent(map[string]any{"port": s.port, "token": s.token}, "", "  ")
+	return os.WriteFile(filepath.Join(identity.AppDir(), "ipc.json"), b, 0o600)
+}
+
+func (s *Server) loadConfig() {
+	if raw, err := os.ReadFile(s.cfgPath); err == nil {
+		json.Unmarshal(raw, &s.cfg)
+	}
+}
+
+func (s *Server) saveConfig() {
+	b, _ := json.MarshalIndent(s.cfg, "", "  ")
+	os.WriteFile(s.cfgPath, b, 0o600)
+}
+
+// FeedAnnounce 由 daemon 喂入收到的设备宣告。
+func (s *Server) FeedAnnounce(e discover.Event) { s.peers.Feed(e) }
+
+// confirmPeer 配对确认回调：登记待确认请求，等待面板裁决。
+func (s *Server) ConfirmPeer(name, id string) bool {
+	s.pairMu.Lock()
+	s.pendName, s.pendID = name, id
+	s.pairMu.Unlock()
+	ch := make(chan bool, 1)
+	s.pairMu.Lock()
+	s.decision = ch
+	s.pairMu.Unlock()
+	select {
+	case allow := <-ch:
+		return allow
+	case <-time.After(90 * time.Second):
+		s.pairMu.Lock()
+		s.pendName, s.pendID = "", ""
+		s.pairMu.Unlock()
+		return false
+	}
+}
+
+// --- HTTP ---
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Query().Get("t") != s.token {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	switch {
+	case req.URL.Path == "/userscript.user.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Write([]byte(s.userscript()))
+	case req.URL.Path == "/panel":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(panelHTML)
+	case strings.HasPrefix(req.URL.Path, "/api/"):
+		s.api(w, req)
+	default:
+		http.NotFound(w, req)
+	}
+}
+
+func (s *Server) api(w http.ResponseWriter, req *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			http.Error(w, fmt.Sprintf("internal: %v", r), http.StatusInternalServerError)
+		}
+	}()
+	switch {
+	case req.URL.Path == "/api/state" && req.Method == http.MethodGet:
+		s.handleState(w, req)
+	case req.URL.Path == "/api/select" && req.Method == http.MethodPost:
+		var in struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&in); err != nil || in.ID == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		s.cfgMu.Lock()
+		s.cfg.Target = protocol.NormalizeID(in.ID)
+		s.saveConfig()
+		s.cfgMu.Unlock()
+		writeOK(w)
+	case req.URL.Path == "/api/send-files" && req.Method == http.MethodPost:
+		s.handleSendFiles(w, req)
+	case req.URL.Path == "/api/send-text" && req.Method == http.MethodPost:
+		s.handleSendText(w, req)
+	case req.URL.Path == "/api/pair/start" && req.Method == http.MethodPost:
+		code, err := s.recv.StartPairing()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"code": code})
+	case req.URL.Path == "/api/pair/pending" && req.Method == http.MethodGet:
+		s.pairMu.Lock()
+		defer s.pairMu.Unlock()
+		if s.pendID == "" {
+			writeJSON(w, map[string]any{"waiting": false})
+			return
+		}
+		writeJSON(w, map[string]any{"waiting": true, "name": s.pendName, "id": s.pendID})
+	case req.URL.Path == "/api/pair/decision" && req.Method == http.MethodPost:
+		var in struct {
+			Allow bool `json:"allow"`
+		}
+		json.NewDecoder(req.Body).Decode(&in)
+		s.pairMu.Lock()
+		ch := s.decision
+		s.pendName, s.pendID = "", ""
+		s.pairMu.Unlock()
+		if ch != nil {
+			ch <- in.Allow
+		}
+		writeOK(w)
+	case req.URL.Path == "/api/pair/join" && req.Method == http.MethodPost:
+		var in struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&in); err != nil || strings.TrimSpace(in.Code) == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(req.Context(), 90*time.Second)
+		defer cancel()
+		// 配对码本身就是验证：逐个尝试可发现的设备，
+		// 错误的设备会返回"配对码无效"，正确的设备接受。
+		cands, err := transfer.FindCandidates(s.id, 7*time.Second)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "message": errMsg(err)})
+			return
+		}
+		var name string
+		var lastErr error
+		for _, t := range cands {
+			if protocol.NormalizeID(t.Announce.ID) == protocol.NormalizeID(s.id.ID()) {
+				continue
+			}
+			var n string
+			if n, lastErr = transfer.Pair(ctx, s.id, s.trust, targetOfInfo(t), in.Code); lastErr == nil {
+				name = n
+				break
+			}
+		}
+		if name == "" {
+			msg := "未发现可配对的设备"
+			if lastErr != nil {
+				msg = errMsg(lastErr)
+			}
+			writeJSON(w, map[string]any{"ok": false, "message": msg})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "name": name})
+	case req.URL.Path == "/api/device/remove" && req.Method == http.MethodPost:
+		var in struct {
+			ID string `json:"id"`
+		}
+		json.NewDecoder(req.Body).Decode(&in)
+		p := s.trust.List()
+		var display string
+		for _, x := range p {
+			if x.ID == protocol.NormalizeID(in.ID) {
+				display = x.DisplayName()
+			}
+		}
+		if !s.trust.Remove(in.ID) {
+			http.Error(w, "设备不存在", http.StatusNotFound)
+			return
+		}
+		if display != "" && s.OnDeviceRemoved != nil {
+			s.OnDeviceRemoved(display)
+		}
+		writeOK(w)
+	case req.URL.Path == "/api/recvdir" && req.Method == http.MethodPost:
+		var in struct {
+			Dir string `json:"dir"`
+		}
+		json.NewDecoder(req.Body).Decode(&in)
+		dir := strings.TrimSpace(in.Dir)
+		if !filepath.IsAbs(dir) {
+			http.Error(w, "需要绝对路径", http.StatusBadRequest)
+			return
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			http.Error(w, "目录不可创建: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.cfgMu.Lock()
+		s.cfg.RecvDir = dir
+		s.saveConfig()
+		s.cfgMu.Unlock()
+		writeOK(w)
+	case (req.URL.Path == "/api/open" || req.URL.Path == "/api/reveal") && req.Method == http.MethodGet:
+		path := req.URL.Query().Get("path")
+		if path == "" {
+			http.Error(w, "缺少 path", http.StatusBadRequest)
+			return
+		}
+		var err error
+		if req.URL.Path == "/api/open" {
+			err = platform.OpenPath(path)
+		} else {
+			err = platform.RevealPath(path)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeOK(w)
+	case req.URL.Path == "/api/firefox-ext" && req.Method == http.MethodPost:
+		dir := firefoxExtDir()
+		if dir == "" {
+			http.Error(w, "未找到扩展目录（exe 同级需存在 extension\firefox）", http.StatusNotFound)
+			return
+		}
+		warning, err := platform.RegisterFirefoxExtension(dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "dir": dir, "warning": warning})
+	case req.URL.Path == "/api/history/delete" && req.Method == http.MethodPost:
+		var in struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in); err != nil || len(in.IDs) == 0 {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		n, err := history.DeleteIDs(in.IDs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "removed": n})
+	case req.URL.Path == "/api/pick-dir" && req.Method == http.MethodPost:
+		dir, err := platform.PickFolder("选择 Drop 接收文件夹")
+		if err != nil || dir == "" {
+			writeJSON(w, map[string]any{"ok": false, "message": "未选择文件夹"})
+			return
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "message": "目录不可用: " + err.Error()})
+			return
+		}
+		s.cfgMu.Lock()
+		s.cfg.RecvDir = dir
+		s.saveConfig()
+		s.cfgMu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "dir": dir})
+	case req.URL.Path == "/api/autostart" && req.Method == http.MethodPost:
+		var in struct {
+			On bool `json:"on"`
+		}
+		if err := json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		var err error
+		if in.On {
+			err = platform.SetAutostart()
+		} else {
+			err = platform.ClearAutostart()
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeOK(w)
+	case req.URL.Path == "/api/unlock" && req.Method == http.MethodPost:
+		if err := identity.SetUnlocked(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeOK(w)
+	default:
+		http.NotFound(w, req)
+	}
+}
+
+func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
+	type dev struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Online bool   `json:"online"`
+	}
+	online := s.onlineSet()
+	var devices []dev
+	for _, p := range s.trust.List() {
+		devices = append(devices, dev{ID: p.ID, Name: p.DisplayName(), Online: online[p.ID]})
+	}
+	s.cfgMu.Lock()
+	cfg := s.cfg
+	s.cfgMu.Unlock()
+	writeJSON(w, map[string]any{
+		"devices":            devices,
+		"target":             cfg.Target,
+		"recv_dir":           cfg.RecvDir,
+		"unlocked":           identity.IsUnlocked(),
+		"limit":              deviceLimit,
+		"ext_dir":            firefoxExtDir(),
+		"ext_dir_chromium":   chromiumExtDir(),
+		"firefox_registered": platform.FirefoxExtensionRegistered(),
+		"autostart":          platform.AutostartEnabled(),
+		"userscript_url":     "/userscript.user.js?t=" + s.token,
+		"history":            history.Load(),
+	})
+}
+
+// onlineSet 已配对设备中确认存活的集合。宣告 6 秒内视为在线；
+// 有设备不在线且距上次探测超过 10 秒时自动补一次子网探测。
+func (s *Server) onlineSet() map[string]bool {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	online := map[string]bool{}
+	for _, info := range s.peers.Snapshot() {
+		online[protocol.NormalizeID(info.Announce.ID)] = true
+	}
+	for id, t := range s.probeSeen { // 探测结果缓存 30 秒，避免在线状态反复横跳
+		if time.Since(t) < 30*time.Second {
+			online[id] = true
+		} else {
+			delete(s.probeSeen, id)
+		}
+	}
+	need := false
+	for _, p := range s.trust.List() {
+		if !online[protocol.NormalizeID(p.ID)] {
+			need = true
+		}
+	}
+	if need && time.Since(s.lastProbe) > 10*time.Second {
+		s.lastProbe = time.Now()
+		if found, err := transfer.Probe(s.id); err == nil {
+			for _, t := range found {
+				key := protocol.NormalizeID(t.ID)
+				online[key] = true
+				s.probeSeen[key] = time.Now()
+			}
+		}
+	}
+	return online
+}
+
+// targetAddr 找到目标设备的当前地址：缓存直连 → 宣告 → 探测。
+func (s *Server) targetAddr(targetID string) (transfer.Target, error) {
+	key := protocol.NormalizeID(targetID)
+	if t, ok := transfer.CachedTarget(s.id, key); ok {
+		return t, nil
+	}
+	for _, info := range s.peers.Snapshot() {
+		if protocol.NormalizeID(info.Announce.ID) == key {
+			t := transfer.Target{
+				Addr: net.JoinHostPort(info.IP, fmt.Sprint(info.Announce.Port)),
+				ID:   info.Announce.ID, Name: info.Announce.Name,
+			}
+			transfer.UpdateIPCache(key, t.Addr)
+			return t, nil
+		}
+	}
+	found, err := transfer.Probe(s.id)
+	if err != nil {
+		return transfer.Target{}, err
+	}
+	for _, t := range found {
+		if protocol.NormalizeID(t.ID) == key {
+			transfer.UpdateIPCache(key, t.Addr)
+			return t, nil
+		}
+	}
+	return transfer.Target{}, errors.New("目标设备不在线")
+}
+
+// handleSendFiles 面板拖拽/选择的文件：先落到临时目录（保留原名），
+// 再走既有文件发送管线，后台完成后弹系统通知。
+func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
+	if err := req.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "上传解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	files := req.MultipartForm.File["files"]
+	if len(files) == 0 {
+		http.Error(w, "没有文件", http.StatusBadRequest)
+		return
+	}
+	s.cfgMu.Lock()
+	target := s.cfg.Target
+	s.cfgMu.Unlock()
+	if target == "" {
+		http.Error(w, "尚未选择目标设备", http.StatusBadRequest)
+		return
+	}
+	if !s.trust.Has(target) {
+		http.Error(w, "目标设备未配对", http.StatusBadRequest)
+		return
+	}
+
+	spool, err := os.MkdirTemp("", "drop-upload-")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var paths []string
+	for _, fh := range files {
+		name := filepath.Base(fh.Filename)
+		if name == "" || name == "." || strings.ContainsRune(name, 0) {
+			continue
+		}
+		dst := filepath.Join(spool, name)
+		if _, err := os.Stat(dst); err == nil { // 同名去重
+			dst = filepath.Join(spool, fmt.Sprintf("(%d)%s", time.Now().UnixNano()%1000, name))
+		}
+		src, err := fh.Open()
+		if err != nil {
+			continue
+		}
+		dstF, err := os.Create(dst)
+		if err != nil {
+			src.Close()
+			continue
+		}
+		if _, err := io.Copy(dstF, src); err != nil {
+			dstF.Close()
+			continue
+		}
+		dstF.Close()
+		src.Close()
+		paths = append(paths, dst)
+	}
+	if len(paths) == 0 {
+		os.RemoveAll(spool)
+		http.Error(w, "没有有效文件", http.StatusBadRequest)
+		return
+	}
+
+	// 先应答，传输在后台执行，结果经系统通知与历史呈现
+	go func() {
+		defer os.RemoveAll(spool)
+		t, err := s.targetAddr(target)
+		if err != nil {
+			if s.NotifyErr != nil {
+				s.NotifyErr("Drop 发送失败", err.Error())
+			}
+			return
+		}
+		display := filepath.Base(paths[0])
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+		defer cancel()
+		sent, err := transfer.Send(ctx, s.id, t, paths, transfer.SendOptions{SkipSourcePath: true})
+		if err != nil {
+			if s.NotifyErr != nil {
+				s.NotifyErr("Drop 发送失败", fmt.Sprintf("%s：%v", sent, err))
+			}
+			return
+		}
+		_ = display
+		if s.NotifyFile != nil {
+			s.NotifyFile("send", t.Name, sent)
+		}
+	}()
+	writeJSON(w, map[string]any{"ok": true, "started": len(paths)})
+}
+
+func (s *Server) handleSendText(w http.ResponseWriter, req *http.Request) {
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(req.Body, 128<<10)).Decode(&in); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	text := strings.TrimSpace(in.Text)
+	if text == "" {
+		http.Error(w, "文本为空", http.StatusBadRequest)
+		return
+	}
+	s.cfgMu.Lock()
+	target := s.cfg.Target
+	s.cfgMu.Unlock()
+	if target == "" {
+		http.Error(w, "尚未选择目标设备", http.StatusBadRequest)
+		return
+	}
+	if !s.trust.Has(target) {
+		http.Error(w, "目标设备未配对", http.StatusBadRequest)
+		return
+	}
+	t, err := s.targetAddr(target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
+	defer cancel()
+	if err := transfer.SendText(ctx, s.id, t, text); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if s.NotifyText != nil {
+		s.NotifyText("send", t.Name, text)
+	}
+	writeOK(w)
+}
+
+func writeOK(w http.ResponseWriter) { writeJSON(w, map[string]any{"ok": true}) }
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func errMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// chromiumExtDir 探测 Chromium 系浏览器的扩展目录。
+func chromiumExtDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(exe), "extension", "chromium")
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// firefoxExtDir 探测浏览器扩展目录：exe 同级的 extension/firefox。
+func firefoxExtDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(exe), "extension", "firefox")
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// targetOfInfo 由宣告信息构造发送目标。
+func targetOfInfo(p discover.PeerInfo) transfer.Target {
+	return transfer.Target{
+		Addr: net.JoinHostPort(p.IP, fmt.Sprint(p.Announce.Port)),
+		ID:   p.Announce.ID, Name: p.Announce.Name,
+	}
+}

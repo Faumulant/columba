@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Drop",
+  "version": "1.0.0",
+  "description": "把网页里看到的内容（页面/选中文本/链接/图片/视频）发送到你的设备。需要 Drop 后台运行。",
+  "permissions": ["contextMenus", "nativeMessaging"],
+  "background": { "service_worker": "background.js" },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArLf+BIkhVaT8Tq/+qC9nnS1ciRIHNOO/F3coTmnk8eUfRzOWjNvi7WOnNGE9xrgb83HftZd5MAcgcJ9W8nlparS/Erktevaf7Eperjl1JU5rAmm2s3XdiZVSOf3vZU+kvT48Uc7Ourp5iiEavZfF1iZGjV1gMDcCfNtQ5+HjbjQngyuKBCuuYWrMY2p/gqqm3UFk3FXaRdfLlP8OdcpACzK+u5tiL9SCjXxQ1Zj+6/Y2Y3wC5lO2bX6JmJvfcecyiNeJvBcM6jf50e5HLPZ71js4ZJCvQ9W5Vw3PzV2zu0qfztBBhgiB2QLh+WqO+WvN/UkETKWgiCTAYXlXjHTyIQIDAQAB"
+}
