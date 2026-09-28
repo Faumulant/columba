@@ -5,6 +5,7 @@ package ipc
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,68 @@ const userscriptTemplate = `// ==UserScript==
   }
 })();`
 
+// TouchPanel 记录面板活跃（/api/state 每次命中时调用）。
+func (s *Server) TouchPanel() {
+	s.probeMu.Lock()
+	s.panelAt = time.Now()
+	s.probeMu.Unlock()
+}
+
+// StartProber 面板打开期间每 8 秒后台探测一次缺失设备的地址，
+// 结果写入 probeSeen 供 onlineSet 读取；面板关闭时探测自动停止。
+func (s *Server) StartProber(ctx context.Context) {
+	go func() {
+		tick := time.NewTicker(8 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			s.probeMu.Lock()
+			active := time.Since(s.panelAt) < 15*time.Second
+			s.probeMu.Unlock()
+			if !active {
+				continue
+			}
+			need := false
+			for _, p := range s.trust.List() {
+				if !s.announceOnline(p.ID) {
+					need = true
+					break
+				}
+			}
+			if !need {
+				continue
+			}
+			if found, err := transfer.Probe(s.id); err == nil {
+				s.probeMu.Lock()
+				for _, t := range found {
+					s.probeSeen[protocol.NormalizeID(t.ID)] = time.Now()
+				}
+				s.probeMu.Unlock()
+			}
+		}
+	}()
+}
+
+func (s *Server) announceOnline(devID string) bool {
+	key := protocol.NormalizeID(devID)
+	for _, info := range s.peers.Snapshot() {
+		if protocol.NormalizeID(info.Announce.ID) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// PanelHash 内嵌面板内容的 SHA-256，供启动器判断 daemon 是否为旧版本。
+func PanelHash() string {
+	sum := sha256.Sum256(panelHTML)
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *Server) userscript() string {
 	return strings.NewReplacer(
 		"__PORT__", fmt.Sprint(s.port),
@@ -147,8 +210,10 @@ type Server struct {
 	decision chan bool
 
 	probeMu   sync.Mutex
-	lastProbe time.Time
 	probeSeen map[string]time.Time
+	panelAt   time.Time // 最近一次面板访问
+
+	OnShutdown func() // daemon 收到关闭指令时回调（启动器接线到退出流程）
 }
 
 // New 创建服务（读取配置、生成 token），随后 SetReceiver 并 Start。
@@ -476,6 +541,11 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		s.saveConfig()
 		s.cfgMu.Unlock()
 		writeJSON(w, map[string]any{"ok": true, "dir": dir})
+	case req.URL.Path == "/api/shutdown" && req.Method == http.MethodPost:
+		if s.OnShutdown != nil {
+			s.OnShutdown()
+		}
+		writeOK(w)
 	case req.URL.Path == "/api/autostart" && req.Method == http.MethodPost:
 		var in struct {
 			On bool `json:"on"`
@@ -544,27 +614,11 @@ func (s *Server) onlineSet() map[string]bool {
 	for _, info := range s.peers.Snapshot() {
 		online[protocol.NormalizeID(info.Announce.ID)] = true
 	}
-	for id, t := range s.probeSeen { // 探测结果缓存 30 秒，避免在线状态反复横跳
+	for id, t := range s.probeSeen { // 后台探测结果缓存 30 秒
 		if time.Since(t) < 30*time.Second {
 			online[id] = true
 		} else {
 			delete(s.probeSeen, id)
-		}
-	}
-	need := false
-	for _, p := range s.trust.List() {
-		if !online[protocol.NormalizeID(p.ID)] {
-			need = true
-		}
-	}
-	if need && time.Since(s.lastProbe) > 10*time.Second {
-		s.lastProbe = time.Now()
-		if found, err := transfer.Probe(s.id); err == nil {
-			for _, t := range found {
-				key := protocol.NormalizeID(t.ID)
-				online[key] = true
-				s.probeSeen[key] = time.Now()
-			}
 		}
 	}
 	return online
