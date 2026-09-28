@@ -117,11 +117,12 @@ func (s *Server) TouchPanel() {
 	s.probeMu.Unlock()
 }
 
-// StartProber 面板打开期间每 8 秒后台探测一次缺失设备的地址，
+// StartProber 面板打开期间每 30 秒后台探测一次缺失设备的地址，
 // 结果写入 probeSeen 供 onlineSet 读取；面板关闭时探测自动停止。
+// 注意：探测是对全网段的端口扫描，频率不宜再高，避免被安全软件误判。
 func (s *Server) StartProber(ctx context.Context) {
 	go func() {
-		tick := time.NewTicker(8 * time.Second)
+		tick := time.NewTicker(30 * time.Second)
 		defer tick.Stop()
 		for {
 			select {
@@ -501,7 +502,7 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		}
 		writeOK(w)
 	case req.URL.Path == "/api/firefox-ext" && req.Method == http.MethodPost:
-		dir := firefoxExtDir()
+		dir := FirefoxExtDir()
 		if dir == "" {
 			http.Error(w, "未找到扩展目录（exe 同级需存在 extension\firefox）", http.StatusNotFound)
 			return
@@ -596,7 +597,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"recv_dir":           cfg.RecvDir,
 		"unlocked":           identity.IsUnlocked(),
 		"limit":              deviceLimit,
-		"ext_dir":            firefoxExtDir(),
+		"ext_dir":            FirefoxExtDir(),
 		"ext_dir_chromium":   chromiumExtDir(),
 		"firefox_registered": platform.FirefoxExtensionRegistered(),
 		"autostart":          platform.AutostartEnabled(),
@@ -725,7 +726,6 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 			}
 			return
 		}
-		display := filepath.Base(paths[0])
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 		defer cancel()
 		sent, err := transfer.Send(ctx, s.id, t, paths, transfer.SendOptions{SkipSourcePath: true})
@@ -735,7 +735,6 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 			}
 			return
 		}
-		_ = display
 		if s.NotifyFile != nil {
 			s.NotifyFile("send", t.Name, sent)
 		}
@@ -810,8 +809,9 @@ func chromiumExtDir() string {
 	return dir
 }
 
-// firefoxExtDir 探测浏览器扩展目录：exe 同级的 extension/firefox。
-func firefoxExtDir() string {
+// FirefoxExtDir 探测浏览器扩展目录：exe 同级的 extension/firefox。
+// 供面板与 drop install 共用（唯一实现）。
+func FirefoxExtDir() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""

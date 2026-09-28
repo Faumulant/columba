@@ -325,9 +325,17 @@ func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it it
 	if err != nil {
 		return fmt.Errorf("传输失败: %w", err)
 	}
+	// 先读 body（错误详情在其中）再关闭，同时让连接可复用
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("接收端拒绝: %s", errBody(resp))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		} else {
+			msg = resp.Status + ": " + msg
+		}
+		return fmt.Errorf("接收端拒绝: %s", msg)
 	}
 
 	cr := protocol.CompleteReq{

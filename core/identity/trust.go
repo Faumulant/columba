@@ -79,10 +79,10 @@ func (t *TrustStore) reloadLocked() {
 // Add 加入信任库并持久化；已存在时不覆盖。name 为对方自报的设备名，
 // 空则退回证书 CN。返回入库后的显示名。
 func (t *TrustStore) Add(id string, cert *x509.Certificate, name string) string {
-	t.reloadLocked()
-	pid := protocol.NormalizeID(id)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
+	pid := protocol.NormalizeID(id)
 	if _, ok := t.peers[pid]; !ok {
 		if name == "" {
 			name = cert.Subject.CommonName
@@ -99,29 +99,29 @@ func (t *TrustStore) Add(id string, cert *x509.Certificate, name string) string 
 }
 
 func (t *TrustStore) Has(id string) bool {
-	t.reloadLocked()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
 	_, ok := t.peers[protocol.NormalizeID(id)]
 	return ok
 }
 
 // Name 返回该设备的显示名（备注优先），未知返回空串。
 func (t *TrustStore) Name(id string) string {
-	t.reloadLocked()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
 	return t.peers[protocol.NormalizeID(id)].DisplayName()
 }
 
 // SetAlias 给已信任设备设置备注名；按 ID（可带分隔符）或当前显示名匹配。
 // alias 为空串表示清除备注。返回是否找到该设备。
 func (t *TrustStore) SetAlias(idOrName, alias string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.reloadLocked()
 	key := protocol.NormalizeID(idOrName)
 	alias = strings.TrimSpace(alias)
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	for id, p := range t.peers {
 		if id == key || p.DisplayName() == idOrName {
 			p.Alias = alias
@@ -135,10 +135,10 @@ func (t *TrustStore) SetAlias(idOrName, alias string) bool {
 
 // Remove 移除一台已信任设备（面板设备管理用）。
 func (t *TrustStore) Remove(id string) bool {
-	t.reloadLocked()
-	key := protocol.NormalizeID(id)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
+	key := protocol.NormalizeID(id)
 	if _, ok := t.peers[key]; !ok {
 		return false
 	}
@@ -149,9 +149,9 @@ func (t *TrustStore) Remove(id string) bool {
 
 // List 返回全部已信任设备，按显示名排序。
 func (t *TrustStore) List() []Peer {
-	t.reloadLocked()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
 	out := make([]Peer, 0, len(t.peers))
 	for _, p := range t.peers {
 		out = append(out, p)
@@ -161,9 +161,9 @@ func (t *TrustStore) List() []Peer {
 }
 
 func (t *TrustStore) Count() int {
-	t.reloadLocked()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.reloadLocked()
 	return len(t.peers)
 }
 

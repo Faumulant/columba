@@ -167,6 +167,7 @@ docs/protocol.md   协议规范
 - 浏览器扩展 ✅（WebExtension）
 - 稳定性打磨 ✅（IP 缓存提速 / 磁盘检查 / 重试）
 - **项目主体完成** — 后续按实际使用反馈迭代
+- **安卓端（规划定稿）**：复用 Go 核心 + Compose 原生 UI
 
 **已知边界**：正式版 Firefox 无法安装未签名 WebExtension（Mozilla 签名锁死）→ 用 Developer Edition；断点续传未实现。
 - M2 Windows 后台 daemon + Explorer 右键 + 通知 + 自启

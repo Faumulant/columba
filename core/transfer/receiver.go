@@ -29,6 +29,7 @@ import (
 
 const (
 	maxManifestFiles = 1000
+	maxSessions      = 64 // 并发会话上限，防止对端（即使是已配对设备）耗尽本机资源
 	sessionTTL       = 30 * time.Minute
 	pairCodeTTL      = 5 * time.Minute
 )
@@ -60,6 +61,7 @@ type fileState struct {
 	hash  hash.Hash
 	bytes int64
 	got   bool // 上传完成，等待 complete 校验
+	done  bool // complete 已受理（防并发重复落盘）
 }
 
 type session struct {
@@ -155,15 +157,17 @@ func (r *Receiver) Run(ctx context.Context) error {
 	fmt.Fprintf(os.Stderr, "%s：%s [%s]\n监听端口 %d → 接收目录 %s\nCtrl+C 退出\n",
 		mode, r.id.Name, protocol.DisplayID(r.id.ID()), r.opt.Port, r.dir())
 
+	// 仅 drop pair 模式在配对完成后退出；常驻模式忽略 paired 信号，
+	// 配对完成后继续接收（nil channel 永不触发，HTTP 服务始终受本函数管理）。
+	var pairedCh <-chan struct{}
+	if r.opt.ExitOnPair {
+		pairedCh = r.paired
+	}
 	select {
 	case <-ctx.Done():
 		srv.Close()
 		return nil
-	case <-r.paired:
-		if !r.opt.ExitOnPair {
-			// 常驻模式：配对完成后继续接收
-			return nil
-		}
+	case <-pairedCh:
 		srv.Close()
 		return nil
 	case err := <-errCh:
@@ -307,6 +311,34 @@ func (r *Receiver) handleOffer(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "清单为空或文件数超限", http.StatusBadRequest)
 		return
 	}
+	r.mu.Lock()
+	if len(r.sessions) >= maxSessions {
+		r.mu.Unlock()
+		http.Error(w, "接收端正忙：并发会话过多，请稍后重试", http.StatusTooManyRequests)
+		return
+	}
+	r.mu.Unlock()
+
+	// 磁盘空间预检（按清单实际总大小，而非对端自报的 TotalSize）；
+	// 同一清单内的重复路径会写同一个 .part 互相损坏，直接拒绝。
+	var total int64
+	seenPaths := map[string]bool{}
+	for _, f := range off.Files {
+		if seenPaths[f.Path] {
+			http.Error(w, "清单包含重复路径: "+f.Path, http.StatusBadRequest)
+			return
+		}
+		seenPaths[f.Path] = true
+		total += f.Size
+	}
+	if r.opt.FreeDisk != nil {
+		if free, err := r.opt.FreeDisk(r.dir()); err == nil && total > int64(free) {
+			http.Error(w, "接收端磁盘空间不足", http.StatusInsufficientStorage)
+			return
+		}
+	}
+
+	sid := randHex(16)
 	s := &session{senderID: peerID(req), files: make(map[string]*fileState, len(off.Files)), last: time.Now()}
 	for i, f := range off.Files {
 		if err := safeRelPath(f.Path); err != nil {
@@ -320,10 +352,9 @@ func (r *Receiver) handleOffer(w http.ResponseWriter, req *http.Request) {
 		f.ID = fmt.Sprintf("f%d", i)
 		s.files[f.ID] = &fileState{
 			meta: f,
-			part: filepath.Join(r.dir(), filepath.FromSlash(f.Path)+".part"),
+			part: filepath.Join(partDir(r.dir(), sid), filepath.FromSlash(f.Path)+".part"),
 		}
 	}
-	sid := randHex(16)
 	r.mu.Lock()
 	r.sessions[sid] = s
 	r.mu.Unlock()
@@ -400,6 +431,11 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// partDir 会话的 .part 暂存目录（按会话隔离，避免不同会话的同名清单路径互相截断）。
+func partDir(base, sid string) string {
+	return filepath.Join(base, ".drop-parts", sid)
+}
+
 func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -416,15 +452,18 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	if s != nil {
 		st = s.files[cr.FileID]
 	}
-	r.mu.Unlock()
 	if st == nil {
+		r.mu.Unlock()
 		http.Error(w, "未知会话或文件", http.StatusNotFound)
 		return
 	}
-	if !st.got || st.file != nil {
-		http.Error(w, "文件尚未传完", http.StatusConflict)
+	if !st.got || st.file != nil || st.done {
+		r.mu.Unlock()
+		http.Error(w, "文件尚未传完或已受理", http.StatusConflict)
 		return
 	}
+	st.done = true // 同一文件只允许一个 complete 进入落盘流程
+	r.mu.Unlock()
 	computed := hex.EncodeToString(st.hash.Sum(nil))
 	if !strings.EqualFold(computed, cr.SHA256) {
 		os.Remove(st.part)
@@ -444,6 +483,9 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		delete(r.sessions, cr.SessionID)
 	}
 	r.mu.Unlock()
+	if len(s.files) == 0 {
+		os.RemoveAll(partDir(r.dir(), cr.SessionID)) // 会话结束，清理暂存目录
+	}
 	savedPath := filepath.Join(r.dir(), final)
 	r.record(senderName(req), filepath.Base(final), st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
@@ -478,9 +520,9 @@ func (r *Receiver) janitor(ctx context.Context) {
 						if st.file != nil {
 							st.file.Close()
 						}
-						os.Remove(st.part)
 					}
 					delete(r.sessions, sid)
+					go os.RemoveAll(partDir(r.dir(), sid)) // 目录删除放锁外
 				}
 			}
 			r.mu.Unlock()

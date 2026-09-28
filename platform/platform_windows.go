@@ -131,10 +131,37 @@ func sendToDir() string {
 	return filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "SendTo")
 }
 
+// sanitizeFileName 剔除 Windows 文件名非法字符、路径分隔符与控制字符，
+// 防止设备显示名（网络对端自报，不可信）被用于路径穿越或脚本注入。
+func sanitizeFileName(s string) string {
+	out := strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`\/:*?"<>|`, r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(s))
+	out = strings.Trim(out, " .")
+	r := []rune(out)
+	if len(r) > 60 {
+		out = string(r[:60])
+	}
+	if out == "" {
+		out = "device"
+	}
+	return out
+}
+
+// psQuote PowerShell 单引号字符串转义：每个单引号替换为两个单引号。
+func psQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
+
 // EnsureSendToLink 为一台已配对设备创建"发送到"快捷方式（已存在则跳过）。
 // 目标指向无控制台的伴生 exe，右键发送不闪黑窗。
 func EnsureSendToLink(display, deviceID string) error {
-	name := filepath.Join(sendToDir(), display+".lnk")
+	name := filepath.Join(sendToDir(), sanitizeFileName(display)+".lnk")
+	// 消毒后仍兜底校验：目标必须位于 SendTo 目录内
+	if dir := filepath.Dir(name); !strings.EqualFold(dir, filepath.Clean(sendToDir())) {
+		return fmt.Errorf("非法的快捷方式路径 %q", name)
+	}
 	if _, err := os.Stat(name); err == nil {
 		return nil
 	}
@@ -144,9 +171,9 @@ func EnsureSendToLink(display, deviceID string) error {
 	}
 	script := `
 $ws = New-Object -ComObject WScript.Shell
-$s = $ws.CreateShortcut('` + name + `')
-$s.TargetPath = '` + exe + `'
-$s.Arguments = 'sendto --to ` + deviceID + `'
+$s = $ws.CreateShortcut('` + psQuote(name) + `')
+$s.TargetPath = '` + psQuote(exe) + `'
+$s.Arguments = 'sendto --to ` + psQuote(deviceID) + `'
 $s.WindowStyle = 7
 $s.Description = 'Drop'
 $s.Save()`
@@ -155,7 +182,11 @@ $s.Save()`
 
 // RemoveSendToLink 移除设备的"发送到"快捷方式。
 func RemoveSendToLink(display string) error {
-	os.Remove(filepath.Join(sendToDir(), display+".lnk"))
+	name := filepath.Join(sendToDir(), sanitizeFileName(display)+".lnk")
+	if dir := filepath.Dir(name); !strings.EqualFold(dir, filepath.Clean(sendToDir())) {
+		return fmt.Errorf("非法的快捷方式路径 %q", name)
+	}
+	os.Remove(name)
 	return nil
 }
 
@@ -267,8 +298,11 @@ func RegisterNativeHost() error {
 		if err != nil {
 			return err
 		}
-		k.SetStringValue("", manifest)
+		err = k.SetStringValue("", manifest)
 		k.Close()
+		if err != nil {
+			return fmt.Errorf("注册 %s 失败: %w", key, err)
+		}
 	}
 	return nil
 }

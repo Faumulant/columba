@@ -2,6 +2,9 @@ package transfer
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,13 +70,22 @@ func CachedTarget(id *identity.Identity, targetID string) (Target, bool) {
 }
 
 // IsRetryable 判断发送错误是否为网络类（值得重试），逻辑性拒绝不重试。
+// 优先用错误类型判定（net.Error / EOF 等，随 %w 包装链透传），
+// 英文系统错误文案仅作兜底——绝不匹配中文业务文案，避免改文案即失效。
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	for _, s := range []string{"传输失败", "无法连接", "连接被", "EOF", "timeout", "reset", "refused"} {
-		if strings.Contains(strings.ToLower(msg), strings.ToLower(s)) {
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{"eof", "timeout", "reset", "refused"} {
+		if strings.Contains(msg, s) {
 			return true
 		}
 	}

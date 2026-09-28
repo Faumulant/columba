@@ -65,6 +65,8 @@ func lineID(idx int, line string) string {
 
 // Load 读取全部历史（面板用；JSONL 体积在本项目场景下可忽略）。
 func Load() []Entry {
+	mu.Lock()
+	defer mu.Unlock()
 	raw, err := os.ReadFile(path())
 	if err != nil {
 		return nil
@@ -85,6 +87,8 @@ func Load() []Entry {
 
 // DeleteIDs 删除指定 ID 的记录，返回实际删除条数。
 func DeleteIDs(ids []string) (int, error) {
+	mu.Lock()
+	defer mu.Unlock()
 	want := map[string]bool{}
 	for _, id := range ids {
 		want[id] = true

@@ -1,6 +1,8 @@
 package transfer
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +44,11 @@ func TestIsRetryable(t *testing.T) {
 		if got := IsRetryable(errString(msg)); got != want {
 			t.Fatalf("IsRetryable(%q) = %v, want %v", msg, got, want)
 		}
+	}
+	// 类型化网络错误（经 %w 包装）必须可重试，与文案无关
+	te := &net.DNSError{IsTimeout: true}
+	if !IsRetryable(fmt.Errorf("无法连接对方: %w", te)) {
+		t.Fatal("包装后的 net.Error 应判定为可重试")
 	}
 }
 

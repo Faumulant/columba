@@ -229,7 +229,11 @@ input.codein:focus{border-color:var(--blue)}
 const T = new URLSearchParams(location.search).get("t") || "";
 const api = (p, o) => fetch("/api/" + p + (p.includes("?") ? "&" : "?") + "t=" + T, o);
 const j = (p, o) => api(p, Object.assign({headers: {"Content-Type": "application/json"}}, o || {})).then(r => r.json());
-function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;") }
+function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;") }
+/* jsStr 输出可安全嵌入单引号 HTML 属性内联事件中的 JS 字符串字面量：
+   JSON.stringify 负责 JS 层转义，esc 负责 HTML 层转义（&#39; 解码后是 '，
+   在双引号 JSON 字符串中只是普通字符，不会终止字符串）。 */
+function jsStr(s) { return esc(JSON.stringify(String(s ?? ""))) }
 function ui(id, on) { document.getElementById(id).classList.toggle("show", on) }
 function toast(msg, opts) {
   if (typeof opts === "boolean") opts = {err: opts};
@@ -245,7 +249,7 @@ function toast(msg, opts) {
   document.getElementById("toasts").appendChild(t);
   if (!sticky) setTimeout(() => { t.style.opacity = 0; t.style.transition = "opacity .4s"; setTimeout(() => t.remove(), 400) }, 2600);
 }
-function dropURL(a, encPath) { api(a + "?path=" + encPath).then(r => r.json()).then(r => { if (!r.ok) toast(r.message || "操作失败", {err:true,sticky:true}) }).catch(() => toast("操作失败", {err:true,sticky:true})) }
+function dropURL(a, path) { api(a + "?path=" + encodeURIComponent(path)).then(r => r.json()).then(r => { if (!r.ok) toast(r.message || "操作失败", {err:true,sticky:true}) }).catch(() => toast("操作失败", {err:true,sticky:true})) }
 
 /* ===== 数据与渲染 ===== */
 let S = null, cat = "doc", filt = "all", view = "list", manage = false;
@@ -307,10 +311,10 @@ function fileRow(e) {
                     : `<span class="chip out">→ 发出 · ${esc(e.peer)}</span>`;
   const openable = e.status === "ok" && e.path;
   const acts = openable && !manage
-    ? `<div class="acts"><button class="btn" onclick="event.stopPropagation();dropURL('open','${encodeURIComponent(e.path)}')">打开</button>
-       <button class="btn" onclick="event.stopPropagation();dropURL('reveal','${encodeURIComponent(e.path)}')">定位</button></div>`
+    ? `<div class="acts"><button class="btn" onclick='event.stopPropagation();dropURL("open",${jsStr(e.path)})'>打开</button>
+       <button class="btn" onclick='event.stopPropagation();dropURL("reveal",${jsStr(e.path)})'>定位</button></div>`
     : `<div class="acts"></div>`;
-  const dbl = openable && !manage ? ` ondblclick="dropURL('open','${encodeURIComponent(e.path)}')"` : "";
+  const dbl = openable && !manage ? ` ondblclick='dropURL("open",${jsStr(e.path)})'` : "";
   const rowclick = manage ? ` onclick="toggleCheck('${e.id}')"` : dbl;
   const cur = openable && !manage ? " cur" : "";
   const ck = manage ? `<input type="checkbox" class="ck" ${checked.has(e.id) ? "checked" : ""} onclick="event.stopPropagation();toggleCheck('${e.id}')">` : "";
@@ -359,12 +363,12 @@ function renderSet(m) {
    <div class="setcard"><div class="setrow"><span class="k">保存位置</span>
    <span class="v">${esc(S.recv_dir || "默认：Downloads/Drop")}</span>
    <button class="btn pri" onclick="pickDir()">选择文件夹</button>
-   <button class="btn" onclick="dropURL('open',encodeURIComponent(S.recv_dir))">打开</button></div></div>
+   <button class="btn" onclick='dropURL("open", S.recv_dir)'>打开</button></div></div>
    <h2>设备管理 · ${S.devices.length}/${lim}</h2>
    <div class="setcard">
    ${S.devices.map(d => `<div class="setrow"><span class="dot ${d.online ? "on" : "off"}"></span>
    <span class="k">${esc(d.name)}</span><span class="v">${d.online ? "在线" : "离线"} · ${esc(d.id.slice(0, 9))}…</span>
-   <button class="x" title="移除" onclick="rmDev('${d.id}','${esc(d.name)}')">✕</button></div>`).join("")}
+   <button class="x" title="移除" onclick='rmDev(${jsStr(d.id)},${jsStr(d.name)})'>✕</button></div>`).join("")}
    <button class="add" onclick="pairOpen()">＋ 添加设备</button>
    ${S.unlocked ? "" : `<div style="text-align:center;margin-top:12px"><span class="btn" style="display:inline-block;color:var(--sub)" onclick="ui('unlockMask',1)">点击解锁三台限制</span></div>`}
    </div>
@@ -409,7 +413,7 @@ function devToggle(e) {
   const d = document.getElementById("dev");
   if (d.classList.toggle("open")) {
     document.getElementById("devMenu").innerHTML = S.devices.map(d =>
-      `<div class="dev-item" onclick="devPick('${d.id}')"><span class="dot ${d.online ? "on" : "off"}"></span>
+      `<div class="dev-item" onclick='devPick(${jsStr(d.id)})'><span class="dot ${d.online ? "on" : "off"}"></span>
        ${esc(d.name)}<span class="id">${d.online ? "在线" : "离线"}</span></div>`).join("")
       || '<div class="dev-item">还没有已配对设备</div>';
   }

@@ -3,17 +3,25 @@
 
 const HOST = "drop.drop";
 let port = null;
+let pending = null; // 当前未应答请求的 resolve，保证请求-响应一一对应
 
 function send(req) {
   return new Promise(resolve => {
     if (!port) {
       port = chrome.runtime.connectNative(HOST);
-      port.onDisconnect.addListener(p => {
+      port.onDisconnect.addListener(() => {
         port = null;
+        if (pending) { const p = pending; pending = null; p(null); }
         if (chrome.runtime.lastError) console.warn("宿主断开:", chrome.runtime.lastError.message);
       });
     }
-    const handler = msg => { port.onMessage.removeListener(handler); resolve(msg); };
+    if (pending) { const p = pending; pending = null; p(null); } // 作废旧请求，避免响应错配
+    pending = resolve;
+    const handler = msg => {
+      if (port) port.onMessage.removeListener(handler);
+      if (pending === resolve) pending = null;
+      resolve(msg);
+    };
     port.onMessage.addListener(handler);
     port.postMessage(req);
   });
