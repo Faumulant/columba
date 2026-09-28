@@ -3,16 +3,13 @@
 package platform
 
 import (
-	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +173,9 @@ func OpenPanelWindow(url string) error {
 	}
 	return shellExecute("open", url, "")
 }
+
+//go:embed icons/drop.ico
+var dropIco []byte // 内嵌的官方图标（托盘用）。
 
 // PickFolder 弹出系统原生的文件夹选择窗口（前台），返回所选路径。
 func PickFolder(desc string) (string, error) {
@@ -480,52 +480,5 @@ func RunTray(ctx context.Context, tooltip string, items []TrayItem, onQuit func(
 	return nil
 }
 
-// iconBytes 运行时绘制 32x32 托盘图标（蓝底、白色下箭头、圆角），包成 ICO。
-func iconBytes() []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	blue := color.RGBA{R: 0x25, G: 0x63, B: 0xEB, A: 0xFF}
-	const r = 8 // 圆角半径
-	for y := 0; y < 32; y++ {
-		for x := 0; x < 32; x++ {
-			// 圆角判定：四角中各放一个圆心做裁剪
-			if x < r && y < r && dist2(x, y, r, r) > r*r {
-				continue
-			}
-			if x >= 32-r && y < r && dist2(x, y, 31-r, r) > r*r {
-				continue
-			}
-			if x < r && y >= 32-r && dist2(x, y, r, 31-r) > r*r {
-				continue
-			}
-			if x >= 32-r && y >= 32-r && dist2(x, y, 31-r, 31-r) > r*r {
-				continue
-			}
-			arrow := (x >= 14 && x <= 17 && y >= 7 && y <= 15) || // 箭杆
-				(y >= 15 && y <= 21 && x >= 16-(y-14) && x <= 15+(y-14)) || // 箭头
-				(y >= 24 && y <= 26 && x >= 8 && x <= 23) // 底部托线
-			if arrow {
-				img.Set(x, y, color.White)
-			} else {
-				img.Set(x, y, blue)
-			}
-		}
-	}
-	var pngBuf bytes.Buffer
-	png.Encode(&pngBuf, img)
-
-	// ICO 容器：ICONDIR(6) + ICONDIRENTRY(16) + 内嵌 PNG
-	ico := make([]byte, 22, 22+pngBuf.Len())
-	binary.LittleEndian.PutUint16(ico[2:], 1) // type: icon
-	binary.LittleEndian.PutUint16(ico[4:], 1) // count
-	ico[6], ico[7] = 32, 32                   // 宽高
-	binary.LittleEndian.PutUint16(ico[10:], 1)
-	binary.LittleEndian.PutUint16(ico[12:], 32)
-	binary.LittleEndian.PutUint32(ico[14:], uint32(pngBuf.Len()))
-	binary.LittleEndian.PutUint32(ico[18:], 22)
-	return append(ico, pngBuf.Bytes()...)
-}
-
-func dist2(x, y, cx, cy int) int {
-	dx, dy := x-cx, y-cy
-	return dx*dx + dy*dy
-}
+// iconBytes 返回内嵌的官方图标。
+func iconBytes() []byte { return dropIco }

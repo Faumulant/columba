@@ -50,6 +50,7 @@ func RegisterFirefoxExtension(extDir string) (string, error) { return "", nil }
 func UnregisterFirefoxExtension() error                      { return nil }
 func RegisterProtocolHandler() error                         { return nil }
 func UnregisterProtocolHandler() error                       { return nil }
+func AutostartEnabled() bool                                 { return false }
 func SetAutostart() error                                    { return nil }
 func ClearAutostart() error                                  { return nil }
 func AllowFirewall() error                                   { return nil }
