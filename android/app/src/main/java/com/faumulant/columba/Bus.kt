@@ -48,7 +48,7 @@ object Bus : mobileapi.EventListener {
 
     // ─── EventListener（Go 回调，线程不保证） ─────────────────────
 
-    override fun OnTransfer(dir: String, peer: String, name: String, path: String, size: Long, ok: Boolean, errInfo: String) {
+    override fun onTransfer(dir: String, peer: String, name: String, path: String, size: Long, ok: Boolean, errInfo: String) {
         val ctx = appCtx ?: return
         main.post {
             refreshHistory()
@@ -66,7 +66,7 @@ object Bus : mobileapi.EventListener {
         }
     }
 
-    override fun OnText(dir: String, peer: String, text: String) {
+    override fun onText(dir: String, peer: String, text: String) {
         val ctx = appCtx ?: return
         main.post {
             refreshHistory()
@@ -77,7 +77,7 @@ object Bus : mobileapi.EventListener {
         }
     }
 
-    override fun OnPairRequest(peerName: String, peerID: String): Boolean {
+    override fun onPairRequest(peerName: String, peerID: String): Boolean {
         // 返回 false：交给 UI 弹窗（允许/拒绝 → PairDecide），超时视为拒绝
         main.post {
             if (pairRequest == null) pairRequest = PairReq(peerName, peerID)
@@ -86,7 +86,7 @@ object Bus : mobileapi.EventListener {
         return false
     }
 
-    override fun OnDeviceChanged() {
+    override fun onDeviceChanged() {
         main.post { refreshDevices() }
     }
 

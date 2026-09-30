@@ -1,2 +1,4 @@
 build/
 libs/*.aar.orig
+libs/*.aar
+libs/*-sources.jar

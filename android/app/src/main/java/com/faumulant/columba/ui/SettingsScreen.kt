@@ -51,6 +51,7 @@ import com.faumulant.columba.AppSettings
 import com.faumulant.columba.Bus
 import com.faumulant.columba.Go
 import com.faumulant.columba.Receiver
+import com.faumulant.columba.persistTreePermission
 import com.faumulant.columba.saveSettings
 
 // 设置页：设备管理（配对）/ 接收存储（D3/D4）/ 后台常驻（D5）/ 关于

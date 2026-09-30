@@ -4,7 +4,7 @@ import mobileapi.Mobileapi
 
 // core/mobileapi（gomobile AAR）的薄封装：
 // - gobind 把 Go 的 (T, error) 双返回值映射为「返回 T + 抛异常」，这里统一转成 Result
-// - 名字保持 Go 原名（Mobileapi.SetDataDir 等），便于与 core/mobileapi 对照
+// - 名字保持 Go 原名（Mobileapi.setDataDir 等），便于与 core/mobileapi 对照
 object Go {
 
     private fun <T> call(block: () -> T): Result<T> = try {
@@ -24,10 +24,10 @@ object Go {
 
     // ─── 初始化 ────────────────────────────────────────────────
 
-    fun setDataDir(dir: String): Result<Unit> = call { Mobileapi.SetDataDir(dir) }
-    fun setPort(port: Int): Result<Unit> = call { Mobileapi.SetPort(port) }
+    fun setDataDir(dir: String): Result<Unit> = call { Mobileapi.setDataDir(dir) }
+    fun setPort(port: Int): Result<Unit> = call { Mobileapi.setPort(port.toLong()) }
     fun selfInfo(): SelfInfo = try {
-        SelfInfo.parse(Mobileapi.SelfInfo())
+        SelfInfo.parse(Mobileapi.selfInfo())
     } catch (e: Throwable) {
         SelfInfo("", "", "")
     }
@@ -35,43 +35,43 @@ object Go {
     // ─── 生命周期 ──────────────────────────────────────────────
 
     fun startReceiver(saveDir: String, autoSave: Boolean, listener: mobileapi.EventListener): Result<Unit> =
-        call { Mobileapi.StartReceiver(saveDir, autoSave, listener) }
+        call { Mobileapi.startReceiver(saveDir, autoSave, listener) }
 
-    fun stopReceiver() = try { Mobileapi.StopReceiver() } catch (_: Throwable) {}
+    fun stopReceiver() = try { Mobileapi.stopReceiver() } catch (_: Throwable) {}
 
     fun startDiscovery(listener: mobileapi.EventListener?): Result<Unit> =
-        call { if (listener == null) Mobileapi.StartDiscovery(null) else Mobileapi.StartDiscovery(listener) }
+        call { if (listener == null) Mobileapi.startDiscovery(null) else Mobileapi.startDiscovery(listener) }
 
-    fun stopDiscovery() = try { Mobileapi.StopDiscovery() } catch (_: Throwable) {}
+    fun stopDiscovery() = try { Mobileapi.stopDiscovery() } catch (_: Throwable) {}
 
     // ─── 设备与配对 ────────────────────────────────────────────
 
     fun listDevices(): List<Device> = try {
-        parseDevices(Mobileapi.ListDevices())
+        parseDevices(Mobileapi.listDevices())
     } catch (e: Throwable) {
         emptyList()
     }
 
-    fun pairStart(): Result<String> = call { Mobileapi.PairStart() }
-    fun pairJoin(code: String): Result<String> = call { Mobileapi.PairJoin(code) }
-    fun pairDecide(allow: Boolean): Result<Unit> = call { Mobileapi.PairDecide(allow) }
-    fun removeDevice(id: String): Result<Unit> = call { Mobileapi.RemoveDevice(id) }
+    fun pairStart(): Result<String> = call { Mobileapi.pairStart() }
+    fun pairJoin(code: String): Result<String> = call { Mobileapi.pairJoin(code) }
+    fun pairDecide(allow: Boolean): Result<Unit> = call { Mobileapi.pairDecide(allow) }
+    fun removeDevice(id: String): Result<Unit> = call { Mobileapi.removeDevice(id) }
 
     // ─── 发送 ──────────────────────────────────────────────────
 
-    fun setTarget(targetId: String): Result<Unit> = call { Mobileapi.SetTarget(targetId) }
-    fun sendText(targetId: String, text: String): Result<Unit> = call { Mobileapi.SendText(targetId, text) }
+    fun setTarget(targetId: String): Result<Unit> = call { Mobileapi.setTarget(targetId) }
+    fun sendText(targetId: String, text: String): Result<Unit> = call { Mobileapi.sendText(targetId, text) }
     fun sendFiles(targetId: String, paths: List<String>): Result<Unit> =
-        call { Mobileapi.SendFiles(targetId, jsonArrayOf(paths)) }
+        call { Mobileapi.sendFiles(targetId, jsonArrayOf(paths)) }
 
     // ─── 历史与设置 ────────────────────────────────────────────
 
     fun history(): List<HistoryEntry> = try {
-        HistoryEntry.parseList(Mobileapi.HistoryJSON())
+        HistoryEntry.parseList(Mobileapi.historyJSON())
     } catch (e: Throwable) {
         emptyList()
     }
 
-    fun deleteHistory(ids: List<String>): Result<Unit> = call { Mobileapi.DeleteHistory(jsonArrayOf(ids)) }
-    fun setSaveDir(dir: String): Result<Unit> = call { Mobileapi.SetSaveDir(dir) }
+    fun deleteHistory(ids: List<String>): Result<Unit> = call { Mobileapi.deleteHistory(jsonArrayOf(ids)) }
+    fun setSaveDir(dir: String): Result<Unit> = call { Mobileapi.setSaveDir(dir) }
 }

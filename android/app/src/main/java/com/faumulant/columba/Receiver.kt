@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import java.io.File
 
 // 接收端生命周期管理：
