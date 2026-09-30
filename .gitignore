@@ -8,3 +8,4 @@ dropw.exe
 *.local
 *.exe~
 tmp_*.txt
+/tools/jdk-21/
