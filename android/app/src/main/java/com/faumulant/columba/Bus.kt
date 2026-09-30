@@ -29,6 +29,9 @@ object Bus : mobileapi.EventListener {
     fun init(ctx: Context) {
         if (appCtx != null) return
         appCtx = ctx.applicationContext
+        // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，
+        // 否则会回退到 cwd 下的 .drop 生成一套错误身份）
+        Go.setDataDir(Receiver.dataDir(appCtx!!).absolutePath)
         refreshAll()
     }
 

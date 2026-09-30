@@ -41,6 +41,8 @@ object Receiver {
     fun ensureStarted(ctx: Context): String? {
         if (running) return null
         val c = ctx.applicationContext
+        // 服务进程可能先于 Activity 启动（开机自启/被杀重启），事件中枢先就位
+        Bus.init(c)
         val dir = Go.setDataDir(dataDir(c).absolutePath)
         if (dir.isFailure) return dir.exceptionOrNull()?.message
         val s = AppSettings.load(c)
