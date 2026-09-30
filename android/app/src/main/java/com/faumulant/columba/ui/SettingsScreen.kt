@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,15 +26,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.NorthEast
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -54,13 +61,14 @@ import com.faumulant.columba.Receiver
 import com.faumulant.columba.persistTreePermission
 import com.faumulant.columba.saveSettings
 
-// 设置页：设备管理（配对）/ 接收存储（D3/D4）/ 后台常驻（D5）/ 关于
+// 设置页：设备管理（配对）/ 接收存储（D3/D4）/ 后台常驻（D5）/ 关于（含本机改名）
 @Composable
 fun SettingsScreen() {
     val ctx = LocalContext.current
     var settings by remember { mutableStateOf(AppSettings.load(ctx)) }
     var showAddDevice by remember { mutableStateOf(false) }
     var removeDev by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
+    var showRename by remember { mutableStateOf(false) }
     val self = Bus.self
 
     fun update(s: AppSettings) {
@@ -71,93 +79,124 @@ fun SettingsScreen() {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)
     ) {
+        // 头部：标题 + 手写体点缀（不影响阅读的边角）
+        Row(
+            Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp, start = 4.dp, end = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("设置", fontSize = 20.sp, style = MaterialTheme.typography.titleLarge)
+            Text(
+                "columba",
+                fontFamily = HandEn,
+                fontSize = 20.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.rotate(-3f),
+            )
+        }
+
         Card {
-            Text("设备管理", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
+            Text("设备管理", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(10.dp))
             val devices = Bus.devices
             if (devices.isEmpty()) {
-                Text("还没有配对设备", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+                Text("还没有配对设备", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             for (d in devices) {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OnlineDot(d.online)
+                    OnlineDot(d.online, size = 7)
                     Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                        Text(d.name.ifBlank { "设备" }, fontSize = 15.sp)
+                        Text(d.name.ifBlank { "设备" }, fontSize = 14.sp, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             if (d.online) "在线" else "离线",
                             fontSize = 11.sp,
-                            color = if (d.online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            color = if (d.online) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
                         )
                     }
                     Icon(
                         Icons.Filled.Delete, "移除",
                         tint = MaterialTheme.colorScheme.outline,
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(18.dp)
                             .clickable { removeDev = d },
                     )
                 }
             }
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Button(onClick = { showAddDevice = true }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
-                Text("添加设备", modifier = Modifier.padding(start = 6.dp))
+            HorizontalDivider(Modifier.padding(vertical = 10.dp), color = HairlineColor)
+            OutlinedButton(
+                onClick = { showAddDevice = true },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+            ) {
+                Icon(Icons.Filled.Add, null, modifier = Modifier.size(14.dp))
+                Text("添加设备", fontSize = 13.sp, modifier = Modifier.padding(start = 7.dp))
             }
         }
 
         Card {
-            Text("接收存储", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+            Text("接收存储", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(10.dp))
             Row {
                 FilterChip(
                     selected = settings.isAuto,
                     onClick = { update(settings.copy(saveMode = "auto")) },
-                    label = { Text("自动保存") },
+                    label = { Text("自动保存", fontSize = 12.sp) },
+                    colors = monochromeChipColors(),
                 )
                 Spacer(Modifier.width(10.dp))
                 FilterChip(
                     selected = !settings.isAuto,
                     onClick = { update(settings.copy(saveMode = "manual")) },
-                    label = { Text("手动保存") },
+                    label = { Text("手动保存", fontSize = 12.sp) },
+                    colors = monochromeChipColors(),
                 )
             }
             if (settings.isAuto) {
                 val treeName = remember(settings.treeUri) { treeDisplayName(settings.treeUri) }
-                Row(
+                Spacer(Modifier.height(10.dp))
+                Surface(
                     Modifier.fillMaxWidth().clickable {
                         // SAF 选择接收文件夹（launcher 定义在本组合函数下方）
                         folderPickRequested = true
-                    }.padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    },
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Icon(Icons.Filled.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                    Column(Modifier.padding(start = 10.dp)) {
-                        Text("接收文件夹", fontSize = 14.sp)
-                        Text(
-                            treeName ?: "点击选择（收到的文件自动存到这里）",
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
-                        )
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                        Column(Modifier.padding(start = 8.dp)) {
+                            Text("接收文件夹", fontSize = 12.sp)
+                            Text(
+                                treeName ?: "点击选择（收到的文件自动存到这里）",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("图片自动入相册", fontSize = 14.sp)
+                        Text("图片自动入相册", fontSize = 13.sp)
                         Text(
                             if (Build.VERSION.SDK_INT >= 29) "收到的图片同时写入系统相册"
                             else "需要 Android 10 以上",
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
                         )
                     }
                     Switch(
                         checked = settings.autoGallery && Build.VERSION.SDK_INT >= 29,
                         enabled = Build.VERSION.SDK_INT >= 29,
                         onCheckedChange = { update(settings.copy(autoGallery = it)) },
+                        colors = monochromeSwitchColors(),
                     )
                 }
                 Text(
@@ -167,23 +206,23 @@ fun SettingsScreen() {
             } else {
                 Text(
                     "每条记录给「保存」按钮，由你选择保存位置；收到的文件暂存应用目录",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 10.dp),
                 )
             }
         }
 
         Card {
-            Text("后台常驻", style = MaterialTheme.typography.titleMedium)
+            Text("后台常驻", style = MaterialTheme.typography.titleSmall)
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("后台接收", fontSize = 14.sp)
+                    Text("后台接收", fontSize = 13.sp)
                     Text(
                         if (Receiver.running) "接收运行中" else "接收未运行",
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
                     )
                 }
                 Switch(
@@ -198,27 +237,52 @@ fun SettingsScreen() {
                             Receiver.stopPersistent(ctx)
                         }
                     },
+                    colors = monochromeSwitchColors(),
                 )
             }
-            TextButton(onClick = { openBatteryIgnore(ctx) }) {
-                Text("电池优化白名单（避免 Doze 延迟接收）", fontSize = 13.sp)
+            Row(
+                Modifier.clickable { openBatteryIgnore(ctx) }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "电池优化白名单（避免 Doze 延迟接收）",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Icon(
+                    Icons.Outlined.NorthEast, null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 6.dp).size(12.dp),
+                )
             }
         }
 
         Card {
-            Text("关于", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            Text("Columba（飞鸠）· 配对一次，即选即发", fontSize = 13.sp)
+            Text("关于", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(10.dp))
+            Text("Columba（飞鸠）· 配对一次，即选即发", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            // 本机名 + 改名入口（调 Go.setDeviceName，广播身份即时更新）
+            Row(
+                Modifier.fillMaxWidth().clickable { showRename = true },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("本机名", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                    Text(
+                        self?.name?.ifBlank { "未命名" } ?: "未命名",
+                        fontSize = 13.sp, style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                Icon(
+                    Icons.Outlined.Edit, "修改本机名",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
             Text(
-                "本机：${self?.name ?: ""}（${self?.displayId ?: ""}）",
-                fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Text(
-                "版本 ${com.faumulant.columba.BuildConfig.VERSION_NAME} · 仅限局域网",
+                "ID ${self?.displayId ?: ""} · 版本 ${com.faumulant.columba.BuildConfig.VERSION_NAME} · 仅限局域网",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 2.dp),
             )
         }
         Spacer(Modifier.height(24.dp))
@@ -257,6 +321,13 @@ fun SettingsScreen() {
         )
     }
 
+    if (showRename) {
+        RenameDialog(
+            initial = self?.name ?: "",
+            onDismiss = { showRename = false },
+        )
+    }
+
     removeDev?.let { d ->
         AlertDialog(
             onDismissRequest = { removeDev = null },
@@ -275,6 +346,70 @@ fun SettingsScreen() {
         )
     }
 }
+
+// 本机改名：写入身份并刷新 Bus.self（其他设备看到的名字随之更新）
+@Composable
+private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    var err by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("修改本机名") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it; err = null },
+                    singleLine = true,
+                    placeholder = { Text("给其他设备看的名字") },
+                )
+                if (err != null) {
+                    Text(err!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val n = name.trim()
+                if (n.isEmpty()) {
+                    err = "名字不能为空"
+                    return@TextButton
+                }
+                Thread {
+                    val r = Go.setDeviceName(n)
+                    if (r.isSuccess) {
+                        Bus.refreshAll()
+                        Bus.showSnackbar("本机名已更新：$n")
+                        onDismiss()
+                    } else {
+                        err = r.exceptionOrNull()?.message ?: "改名失败"
+                    }
+                }.start()
+            }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+// 单色 Chip：选中 = 反转实底，未选 = 描边
+@Composable
+private fun monochromeChipColors() = FilterChipDefaults.filterChipColors(
+    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    selectedContainerColor = MaterialTheme.colorScheme.primary,
+    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+)
+
+// 单色 Switch：开 = 反转实底黑点，关 = 描边灰
+@Composable
+private fun monochromeSwitchColors() = SwitchDefaults.colors(
+    checkedTrackColor = MaterialTheme.colorScheme.primary,
+    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+    checkedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+    uncheckedTrackColor = androidx.compose.ui.graphics.Color.Transparent,
+    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
+)
 
 // 跨组合函数传递的局部开关（页内一次性的 SAF/权限请求触发器）
 private var folderPickRequested by mutableStateOf(false)
@@ -308,9 +443,10 @@ private fun openBatteryIgnore(ctx: android.content.Context) {
 @Composable
 private fun Card(content: @Composable () -> Unit) {
     Surface(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        shape = RoundedCornerShape(12.dp),
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
     ) {
         Column(Modifier.padding(14.dp)) { content() }
     }
@@ -331,7 +467,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
         title = { Text("添加设备") },
         text = {
             Column {
-                Text("方式一：本机出码（在电脑端输入）", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+                Text("方式一：本机出码（在电脑端输入）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (myCode != null) {
@@ -360,7 +496,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                     Text(myCodeErr!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                Text("方式二：输入对方显示的配对码", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+                Text("方式二：输入对方显示的配对码", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
                     value = input,
@@ -373,7 +509,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                     Text(joinMsg!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
                 if (joining) {
-                    Text("正在配对（最长 90 秒）…", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                    Text("正在配对（最长 90 秒）…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         },

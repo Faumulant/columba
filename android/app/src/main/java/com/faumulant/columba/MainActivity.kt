@@ -6,21 +6,29 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -31,6 +39,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -47,10 +56,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.faumulant.columba.ui.ColumbaTheme
+import com.faumulant.columba.ui.HairlineColor
 import com.faumulant.columba.ui.ReceiveScreen
 import com.faumulant.columba.ui.SendSheet
 import com.faumulant.columba.ui.SettingsScreen
@@ -61,6 +71,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 沉浸式：状态栏/导航栏透出背景色，消除顶部白条
+        enableEdgeToEdge()
         openReceiveTab = intent?.getStringExtra("open") == "receive"
         Bus.init(applicationContext)
         Notifier.ensureChannels(this)
@@ -141,16 +153,23 @@ class MainActivity : ComponentActivity() {
             },
         ) { padding ->
             Surface(Modifier.fillMaxSize().padding(padding), color = MaterialTheme.colorScheme.surface) {
-                when (tab) {
-                    Tab.RECEIVE -> ReceiveScreen(
-                        selectedTargetId = selectedTarget,
-                        onSelectTarget = { d ->
-                            selectedTarget = d.id
-                            Thread { Go.setTarget(d.id) }.start()
-                        },
-                        onSaveRecord = onSaveRecord,
-                    )
-                    Tab.SETTINGS -> SettingsScreen()
+                // 页面切换：交叉淡化 200ms，克制不抢戏
+                AnimatedContent(
+                    targetState = tab,
+                    transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(160)) },
+                    label = "page",
+                ) { t ->
+                    when (t) {
+                        Tab.RECEIVE -> ReceiveScreen(
+                            selectedTargetId = selectedTarget,
+                            onSelectTarget = { d ->
+                                selectedTarget = d.id
+                                Thread { Go.setTarget(d.id) }.start()
+                            },
+                            onSaveRecord = onSaveRecord,
+                        )
+                        Tab.SETTINGS -> SettingsScreen()
+                    }
                 }
             }
         }
@@ -186,55 +205,86 @@ class MainActivity : ComponentActivity() {
 private enum class Tab { RECEIVE, SETTINGS }
 
 // 底栏三段：接收（信封开合过渡）/ 圆形 FAB（凸出）/ 设置
+// 结构要点：外层 Box 不做任何裁切，FAB 叠在底条之上自然凸出（修复旧版 Surface 裁掉 FAB 顶部的问题）
 @Composable
 private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)) {
-        Row(Modifier.fillMaxWidth().height(72.dp)) {
-            BottomItem(
-                Modifier.weight(1f),
-                label = "接收",
-                selected = tab == Tab.RECEIVE,
-                onClick = { onTab(Tab.RECEIVE) },
-            ) { selected ->
-                // 信封动画：未选中=闭合，选中=开盖（D5 打磨项的前置简单版）
-                AnimatedContent(
-                    targetState = selected,
-                    transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.7f)) togetherWith (fadeOut() + scaleOut(targetScale = 0.7f)) },
-                    label = "envelope",
-                ) { sel ->
-                    Icon(
-                        if (sel) Icons.Filled.Drafts else Icons.Filled.Email,
-                        contentDescription = "接收",
-                        modifier = Modifier.size(26.dp),
-                        tint = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                FloatingActionButton(
-                    onClick = onFab,
-                    shape = CircleShape,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.offset(y = (-14).dp).size(58.dp),
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column {
+            Box(Modifier.fillMaxWidth().height(88.dp)) {
+                // 底条（64dp，贴底）
+                Column(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
                 ) {
-                    Icon(Icons.Filled.Add, "发送", modifier = Modifier.size(28.dp))
+                    HorizontalDivider(color = HairlineColor)
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BottomItem(
+                            Modifier.weight(1f),
+                            label = "接收",
+                            selected = tab == Tab.RECEIVE,
+                            onClick = { onTab(Tab.RECEIVE) },
+                        ) { selected ->
+                            // 信封动画：未选中=闭合，选中=开盖（保留原有动效）
+                            AnimatedContent(
+                                targetState = selected,
+                                transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.7f)) togetherWith (fadeOut() + scaleOut(targetScale = 0.7f)) },
+                                label = "envelope",
+                            ) { sel ->
+                                Icon(
+                                    if (sel) Icons.Filled.Drafts else Icons.Filled.Email,
+                                    contentDescription = "接收",
+                                    modifier = Modifier.size(22.dp),
+                                    tint = if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.weight(1f)) // 中央 FAB 占位
+                        BottomItem(
+                            Modifier.weight(1f),
+                            label = "设置",
+                            selected = tab == Tab.SETTINGS,
+                            onClick = { onTab(Tab.SETTINGS) },
+                        ) { selected ->
+                            Icon(
+                                Icons.Filled.Settings,
+                                contentDescription = "设置",
+                                modifier = Modifier.size(22.dp),
+                                tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
                 }
-            }
-            BottomItem(
-                Modifier.weight(1f),
-                label = "设置",
-                selected = tab == Tab.SETTINGS,
-                onClick = { onTab(Tab.SETTINGS) },
-            ) { selected ->
-                Icon(
-                    Icons.Filled.Settings,
-                    contentDescription = "设置",
-                    modifier = Modifier.size(26.dp),
-                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                // 凸出 FAB：按压 ×0.92 弹簧回弹
+                PressFab(
+                    onClick = onFab,
+                    modifier = Modifier.align(Alignment.TopCenter),
                 )
             }
+            Spacer(Modifier.navigationBarsPadding())
         }
+    }
+}
+
+@Composable
+private fun PressFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val fabScale by animateFloatAsState(
+        targetValue = if (pressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "fabPress",
+    )
+    FloatingActionButton(
+        onClick = onClick,
+        shape = CircleShape,
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        interactionSource = interactionSource,
+        modifier = modifier.size(57.dp).scale(fabScale),
+    ) {
+        Icon(Icons.Filled.Add, "发送", modifier = Modifier.size(24.dp))
     }
 }
 
@@ -247,16 +297,16 @@ private fun BottomItem(
     icon: @Composable (Boolean) -> Unit,
 ) {
     Column(
-        modifier
-            .clickable(onClick = onClick)
-            .padding(top = 10.dp, bottom = 14.dp),
+        modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         icon(selected)
+        Spacer(Modifier.height(3.dp))
         Text(
             label,
-            fontSize = 11.sp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+            fontSize = 10.sp,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
         )
     }
 }

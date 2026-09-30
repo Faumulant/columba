@@ -1,26 +1,26 @@
 package com.faumulant.columba.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,38 +30,64 @@ import java.text.DateFormat
 import java.util.Date
 
 // 与桌面面板同构的小部件：方向胶囊 / 分类图标 / 时间与大小格式化
+// 黑白单色体系：「收到」实底、「发出」描边；分类图标不再按类别上色。
 
 @Composable
 fun DirectionPill(dir: String) {
     val recv = dir == "recv"
-    val bg = if (recv) Color(0xFFDCFCE7) else Color(0xFFDBEAFE)
-    val fg = if (recv) Color(0xFF15803D) else Color(0xFF1D4ED8)
-    Box(
-        Modifier
-            .background(bg, RoundedCornerShape(999.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(if (recv) "收到" else "发出", color = fg, fontSize = 11.sp)
+    if (recv) {
+        Box(
+            Modifier
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(
+                "收到",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 10.sp,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+    } else {
+        Box(
+            Modifier
+                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(
+                "发出",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
     }
 }
 
+// 分类图标盒：40dp 圆角浅底 + 单色图标
 @Composable
 fun CategoryIcon(entry: HistoryEntry, size: Int = 28) {
-    val (icon, tint) = iconOf(entry)
+    val icon = iconOf(entry)
     Box(
-        Modifier.size(size.dp),
-        contentAlignment = Alignment.Center
+        Modifier
+            .size(size.dp)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), RoundedCornerShape(size / 3)),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size((size - 6).dp))
+        Icon(
+            icon, null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size((size - 14).dp),
+        )
     }
 }
 
-fun iconOf(entry: HistoryEntry): Pair<ImageVector, Color> = when (entry.category) {
-    HistoryEntry.Category.AUDIO -> Icons.Filled.MusicNote to Color(0xFF9333EA)
-    HistoryEntry.Category.IMAGE -> Icons.Filled.Image to Color(0xFF0E7490)
-    HistoryEntry.Category.VIDEO -> Icons.Filled.Movie to Color(0xFFB45309)
-    HistoryEntry.Category.TEXT -> Icons.Filled.Notes to Color(0xFF475569)
-    else -> Icons.Filled.Description to Color(0xFF475569)
+fun iconOf(entry: HistoryEntry): ImageVector = when (entry.category) {
+    HistoryEntry.Category.AUDIO -> Icons.Filled.MusicNote
+    HistoryEntry.Category.IMAGE -> Icons.Filled.Image
+    HistoryEntry.Category.VIDEO -> Icons.Filled.Movie
+    HistoryEntry.Category.TEXT -> Icons.AutoMirrored.Filled.Notes
+    else -> Icons.Filled.Description
 }
 
 val dirIcon: ImageVector = Icons.Filled.ArrowDownward

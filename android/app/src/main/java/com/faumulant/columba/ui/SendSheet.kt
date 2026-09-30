@@ -7,24 +7,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.NorthEast
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,7 +42,8 @@ import com.faumulant.columba.Go
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-// FAB 发送面板：目标设备下拉 + 文件（系统选择器）/文本，箭头 = 发送（邮件隐喻）
+// FAB 发送面板：目标设备 + 文件（系统选择器）/ 文本
+// 失败原因内联在面板里（不再依赖会被遮罩盖住的 snackbar）
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SendSheet(
@@ -55,12 +56,14 @@ fun SendSheet(
     var text by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pickedNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    var sendError by remember { mutableStateOf<String?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         pickedNames = uris.map { it.displayName(ctx) }
+        sendError = null
         busy = true
         scope.launch(Dispatchers.IO) {
             try {
@@ -84,84 +87,116 @@ fun SendSheet(
                 }
                 val r = Go.sendFiles(selectedId ?: "", paths)
                 withContext2 {
-                    if (r.isSuccess) onDismiss() else Bus.showSnackbar("发送失败：${r.exceptionOrNull()?.message}")
+                    if (r.isSuccess) onDismiss() else sendError = "发送失败：${r.exceptionOrNull()?.message}"
                 }
             } catch (e: Exception) {
-                Bus.showSnackbar("发送失败：${e.message}")
+                withContext2 { sendError = "发送失败：${e.message}" }
             } finally {
-                busy = false
+                withContext2 { busy = false }
             }
         }
     }
 
-    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            Text("发送到", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
-            DeviceDropdown(selectedId = selectedId, onSelect = onSelectTarget)
-            Spacer(Modifier.height(10.dp))
-
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("输入要发送的文本") },
-                minLines = 2,
-                maxLines = 6,
-                enabled = !busy,
-            )
-            if (pickedNames.isNotEmpty()) {
-                Text(
-                    "文件：${pickedNames.joinToString("、")}",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-            Spacer(Modifier.height(14.dp))
+    ModalBottomSheet(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // 目标行：标签在左，设备选择在右
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FilledIconButton(onClick = { filePicker.launch(arrayOf("*/*")) }, enabled = !busy) {
-                    Icon(Icons.Filled.AttachFile, "选择文件")
-                }
-                FilledIconButton(
-                    onClick = {
-                        val t = text.trim()
-                        if (t.isEmpty()) return@FilledIconButton
-                        busy = true
-                        scope.launch(Dispatchers.IO) {
-                            val r = Go.sendText(selectedId ?: "", t)
-                            launch(Dispatchers.Main) {
-                                busy = false
-                                if (r.isSuccess) {
-                                    text = ""
-                                    onDismiss()
-                                } else Bus.showSnackbar("发送失败：${r.exceptionOrNull()?.message}")
-                            }
+                Text("发送至", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DeviceDropdown(selectedId = selectedId, onSelect = onSelectTarget)
+            }
+
+            // 次按钮：描边 + 文字（原纯图标 FilledIconButton 层级不清）
+            OutlinedButton(
+                onClick = { filePicker.launch(arrayOf("*/*")) },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)),
+            ) {
+                Icon(Icons.Filled.AttachFile, null, modifier = Modifier.size(16.dp))
+                Text("选择文件", fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
+            }
+            if (pickedNames.isNotEmpty()) {
+                Text(
+                    "已选：${pickedNames.joinToString("、")}",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it; sendError = null },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("说点什么…（可选）", color = MaterialTheme.colorScheme.outline) },
+                minLines = 3,
+                maxLines = 6,
+                enabled = !busy,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                ),
+            )
+
+            // 主按钮：实心反转色，发送文本
+            Button(
+                onClick = {
+                    val t = text.trim()
+                    if (t.isEmpty()) return@Button
+                    sendError = null
+                    busy = true
+                    scope.launch(Dispatchers.IO) {
+                        val r = Go.sendText(selectedId ?: "", t)
+                        launch(Dispatchers.Main) {
+                            busy = false
+                            if (r.isSuccess) {
+                                text = ""
+                                onDismiss()
+                            } else sendError = "发送失败：${r.exceptionOrNull()?.message}"
                         }
-                    },
-                    enabled = !busy && text.isNotBlank(),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                    ),
-                    modifier = Modifier.size(52.dp),
-                ) {
-                    if (busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp), strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Icon(Icons.Filled.ArrowUpward, "发送", modifier = Modifier.size(24.dp))
                     }
+                },
+                enabled = !busy && text.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp), strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    Text("发送", fontSize = 14.sp, style = MaterialTheme.typography.titleSmall)
+                    Icon(
+                        Icons.Filled.NorthEast, null,
+                        modifier = Modifier.padding(start = 6.dp).size(15.dp),
+                    )
                 }
             }
-            Spacer(Modifier.height(4.dp))
+
+            // 失败内联提示：面板内可见，不被遮罩遮挡
+            if (sendError != null) {
+                Text(sendError!!, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+            }
+
+            // 斑鸠叫声，手写体落款（纯点缀）
             Text(
-                "文件走系统选择器，文本即输即发；未选目标时先在左上角选择",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                "咕咕咕~",
+                fontFamily = HandZh,
+                fontSize = 16.sp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                modifier = Modifier.fillMaxWidth().rotate(-2f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
     }

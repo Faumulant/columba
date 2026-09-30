@@ -2,6 +2,12 @@ package com.faumulant.columba.ui
 
 import android.graphics.BitmapFactory
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,6 +16,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,13 +32,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -59,7 +65,7 @@ import com.faumulant.columba.Receiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// 接收页：顶部目标设备下拉 + 五类 tabs + 记录列表（图片类带缩略图）
+// 接收页：顶部目标设备下拉 + 商标斑鸠 / 五分类等宽 tabs / 记录列表（图片类带缩略图）
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReceiveScreen(
@@ -73,40 +79,66 @@ fun ReceiveScreen(
     val cats = HistoryEntry.Category.entries
 
     Column(Modifier.fillMaxSize()) {
+        // 头部：设备选择（左）+ 斑鸠商标（右，微倾斜，纯点缀不可点）
         Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
+            Modifier.fillMaxWidth().padding(top = 4.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DeviceDropdown(selectedId = selectedTargetId, onSelect = onSelectTarget)
+            DeviceDropdown(
+                selectedId = selectedTargetId,
+                onSelect = onSelectTarget,
+                modifier = Modifier.weight(1f),
+            )
+            Image(
+                painter = dovePainter(),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp).rotate(-8f),
+            )
         }
-        ScrollableTabRow(selectedTabIndex = cat, edgePadding = 8.dp) {
+
+        // 五分类等宽 tabs：选中 = 半粗 + 短下划线，未选中弱灰（361dp 一屏全显）
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+        ) {
             for ((i, c) in cats.withIndex()) {
-                Tab(selected = cat == i, onClick = { cat = i }, text = { Text(c.label) })
-            }
-        }
-        val list = remember(cat, Bus.history) {
-            val wanted = cats[cat]
-            Bus.history.filter { it.category == wanted }.sortedByDescending { it.time }
-        }
-        if (list.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (Receiver.running) "还没有记录\n等电脑发点东西过来吧"
-                    else "接收未运行\n打开 App 或开启后台常驻",
-                    color = MaterialTheme.colorScheme.outline,
-                    fontSize = 14.sp,
-                    lineHeight = 22.sp,
+                CategoryTab(
+                    label = c.label,
+                    selected = cat == i,
+                    onClick = { cat = i },
+                    modifier = Modifier.weight(1f),
                 )
             }
-        } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp)) {
-                items(list, key = { it.id }) { e ->
-                    RecordCard(
-                        entry = e,
-                        onClick = { detail = e },
-                        onLongPress = { toDelete = e },
-                        onSave = { onSaveRecord(e) },
-                    )
+        }
+
+        // 分类切换：淡入 + 轻微上移，180ms，不抢戏
+        AnimatedContent(
+            targetState = cat,
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            transitionSpec = {
+                (fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 24 }) togetherWith
+                    fadeOut(tween(120))
+            },
+            label = "category",
+        ) { currentCat ->
+            val list = remember(currentCat, Bus.history) {
+                Bus.history.filter { it.category == cats[currentCat] }.sortedByDescending { it.time }
+            }
+            if (list.isEmpty()) {
+                EmptyState()
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(list, key = { it.id }) { e ->
+                        RecordCard(
+                            entry = e,
+                            onClick = { detail = e },
+                            onLongPress = { toDelete = e },
+                            onSave = { onSaveRecord(e) },
+                        )
+                    }
                 }
             }
         }
@@ -140,6 +172,81 @@ fun ReceiveScreen(
     }
 }
 
+@Composable
+private fun CategoryTab(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier.clickable(onClick = onClick).padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            style = if (selected) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+        )
+        Spacer(Modifier.height(5.dp))
+        Box(
+            Modifier
+                .width(18.dp)
+                .height(2.dp)
+                .background(
+                    if (selected) MaterialTheme.colorScheme.onSurface else Color.Transparent,
+                    RoundedCornerShape(1.dp),
+                )
+        )
+    }
+}
+
+// 空态：细线收件箱 + 两行灰文案 + 手写体点缀（接收运行中时）
+@Composable
+private fun EmptyState() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Outlined.Inbox, null,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f),
+                modifier = Modifier.size(52.dp),
+            )
+            Spacer(Modifier.height(14.dp))
+            if (Receiver.running) {
+                Text(
+                    "还没有记录",
+                    fontSize = 15.sp,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "等电脑发点东西过来吧",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "waiting for a drop…",
+                    fontFamily = HandEn,
+                    fontSize = 19.sp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.8f),
+                    modifier = Modifier.rotate(-3f),
+                )
+            } else {
+                Text(
+                    "接收未运行",
+                    fontSize = 15.sp,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "打开 App 或开启后台常驻",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecordCard(entry: HistoryEntry, onClick: () -> Unit, onLongPress: () -> Unit, onSave: () -> Unit) {
@@ -147,45 +254,49 @@ private fun RecordCard(entry: HistoryEntry, onClick: () -> Unit, onLongPress: ()
     Surface(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(14.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
     ) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             if (entry.category == HistoryEntry.Category.IMAGE && !entry.isText && entry.path.isNotEmpty()) {
                 Thumb(entry.path, 40)
             } else {
-                CategoryIcon(entry, 34)
+                CategoryIcon(entry, 40)
             }
-            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 if (entry.isText) {
                     Text(
                         entry.text.replace('\n', ' '),
                         maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.bodyLarge,
                     )
                 } else {
                     Text(
                         entry.name, maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.bodyLarge,
                     )
                 }
+                Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     DirectionPill(entry.dir)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        fmtTime(entry.time) + (if (entry.size > 0 && !entry.isText) " · " + fmtSize(entry.size) else ""),
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+                        fmtTime(entry.time) + (if (entry.size > 0 && !entry.isText) " · " + fmtSize(entry.size) else "") +
+                            if (entry.status != "ok") " · 传输中断" else "",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
                     )
                 }
             }
             if (entry.status == "ok") {
-                Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF22C55E), modifier = Modifier.size(20.dp))
+                Icon(Icons.Filled.CheckCircle, null, tint = SuccessColor, modifier = Modifier.size(18.dp))
             } else {
-                Icon(Icons.Filled.ErrorOutline, null, tint = Color(0xFFEF4444), modifier = Modifier.size(20.dp))
+                Icon(Icons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
             }
             // 手动保存模式：收到的文件给「保存」按钮（D3）
             if (!entry.isText && entry.isRecv && entry.status == "ok" && !s.isAuto) {
@@ -223,7 +334,7 @@ fun Thumb(path: String, sizeDp: Int) {
         Image(
             b.asImageBitmap(), null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(sizeDp.dp).clip(RoundedCornerShape(6.dp)),
+            modifier = Modifier.size(sizeDp.dp).clip(RoundedCornerShape(10.dp)),
         )
     } else {
         CategoryIcon(HistoryEntry(name = path.substringAfterLast('/')), sizeDp)
@@ -239,12 +350,13 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
         title = { Text(if (entry.isText) "文本" else entry.name, fontSize = 17.sp) },
         text = {
             Column {
-                Text("来自 ${entry.peer} · ${fmtTimeFull(entry.time)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                Text("来自 ${entry.peer} · ${fmtTimeFull(entry.time)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
                 if (entry.isText) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
                     ) {
                         Text(
                             entry.text,
@@ -264,8 +376,8 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                         Text("复制全文", modifier = Modifier.padding(start = 4.dp))
                     }
                 } else {
-                    if (entry.path.isNotEmpty()) Text("已存到 ${entry.path}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                    if (entry.error.isNotEmpty()) Text("错误：${entry.error}", fontSize = 12.sp, color = Color(0xFFEF4444))
+                    if (entry.path.isNotEmpty()) Text("已存到 ${entry.path}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (entry.error.isNotEmpty()) Text("错误：${entry.error}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
             }
         },
