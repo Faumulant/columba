@@ -60,7 +60,16 @@ func New(selfID string) (*Discovery, error) {
 		events: make(chan Event, 16),
 		stop:   make(chan struct{}),
 	}
-	all, _ := net.Interfaces()
+	all, err := net.Interfaces()
+	if err != nil || len(all) == 0 {
+		// netlink 受限（部分安卓 SELinux 策略，netlinkrib: permission denied）：
+		// 退回系统默认组播接口 Join（nil 即内核默认），收包仍可用
+		if jerr := d.pconn.JoinGroup(nil, group); jerr == nil {
+			if debug() {
+				fmt.Fprintf(os.Stderr, "[discover] netlink 受限，已加入默认组播接口\n")
+			}
+		}
+	}
 	for i := range all {
 		ifi := all[i]
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 ||
@@ -107,6 +116,11 @@ func (d *Discovery) StartAnnouncing(a protocol.Announce) {
 }
 
 func (d *Discovery) sendAll(b []byte) {
+	if len(d.ifaces) == 0 {
+		// 无已枚举网卡（netlink 受限）：交给内核默认组播接口发送
+		d.pconn.WriteTo(b, nil, d.group)
+		return
+	}
 	for _, ifi := range d.ifaces {
 		d.pconn.SetMulticastInterface(ifi)
 		if _, err := d.pconn.WriteTo(b, nil, d.group); err != nil && debug() {

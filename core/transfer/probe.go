@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -26,6 +27,9 @@ func probeSubnet(id *identity.Identity, port int) ([]Target, error) {
 	nets, err := localNetworks()
 	if err != nil {
 		return nil, err
+	}
+	if DebugLog != nil {
+		DebugLog("probe: 网段=%v", nets)
 	}
 	// 1) 并行探测各网段的服务端口
 	var mu sync.Mutex
@@ -53,6 +57,9 @@ func probeSubnet(id *identity.Identity, port int) ([]Target, error) {
 	}
 	wg.Wait()
 	sort.Strings(open)
+	if DebugLog != nil {
+		DebugLog("probe: 开放端口=%d", len(open))
+	}
 
 	// 2) 对开放端口做 TLS 握手识别身份（排除本机）
 	var out []Target
@@ -83,7 +90,17 @@ func identify(id *identity.Identity, addr string, timeout time.Duration) (Target
 }
 
 // localNetworks 收集本机所有非回环 IPv4 网段的 /24 基地址（去重）。
+// netlink 被禁时（部分安卓 SELinux 策略，netlinkrib: permission denied）
+// 回退到 UDP connect 选路套路。
 func localNetworks() ([]net.IP, error) {
+	if out, err := interfaces24(); err == nil && len(out) > 0 {
+		return out, nil
+	}
+	return udpRoute24s()
+}
+
+// interfaces24 经 net.Interfaces（rtnetlink）枚举网段。PC 与部分安卓可用。
+func interfaces24() ([]net.IP, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
@@ -113,6 +130,33 @@ func localNetworks() ([]net.IP, error) {
 				out = append(out, base)
 			}
 		}
+	}
+	return out, nil
+}
+
+// udpRoute24s 无 netlink 时的网段回退：UDP connect 不发包，只让内核选路，
+// 读出本机源地址后取其 /24。对多个公网目标做一遍，尽量覆盖策略路由。
+func udpRoute24s() ([]net.IP, error) {
+	seen := map[string]bool{}
+	var out []net.IP
+	for _, t := range []string{"8.8.8.8:53", "1.1.1.1:53", "223.5.5.5:53", "114.114.114.114:53"} {
+		c, err := net.DialTimeout("udp4", t, time.Second)
+		if err != nil {
+			continue
+		}
+		if la, ok := c.LocalAddr().(*net.UDPAddr); ok && la.IP != nil {
+			if ip := la.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+				base := net.IPv4(ip[0], ip[1], ip[2], 0).To4()
+				if !seen[base.String()] {
+					seen[base.String()] = true
+					out = append(out, base)
+				}
+			}
+		}
+		c.Close()
+	}
+	if len(out) == 0 {
+		return nil, errors.New("无法确定本机网段（netlink 受限且无可用路由）")
 	}
 	return out, nil
 }

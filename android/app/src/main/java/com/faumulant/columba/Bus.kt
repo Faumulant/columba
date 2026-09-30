@@ -32,6 +32,14 @@ object Bus : mobileapi.EventListener {
         // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，
         // 否则会回退到 cwd 下的 .drop 生成一套错误身份）
         Go.setDataDir(Receiver.dataDir(appCtx!!).absolutePath)
+        // 安卓默认主机名是 localhost：身份名是它（或空）时改用机型名
+        run {
+            val s = Go.selfInfo()
+            if (s.name.isBlank() || s.name.equals("localhost", true)) {
+                val model = android.os.Build.MODEL.trim().ifBlank { "Android 设备" }
+                Go.setDeviceName(model)
+            }
+        }
         refreshAll()
     }
 

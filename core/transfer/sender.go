@@ -64,10 +64,18 @@ loop:
 		}
 	}
 	all := tr.Snapshot()
+	if DebugLog != nil {
+		DebugLog("FindCandidates: 组播快照=%d", len(all))
+	}
 	if len(all) == 0 {
 		// 组播一无所获（路由器/AP 不转发无线组播是常态）→ 子网探测兜底
 		if found, perr := probeSubnet(id, defaultPort); perr == nil && len(found) > 0 {
+			if DebugLog != nil {
+				DebugLog("FindCandidates: 探测到 %d 台", len(found))
+			}
 			all = peersFromTargets(found)
+		} else if DebugLog != nil {
+			DebugLog("FindCandidates: 探测为空 err=%v", perr)
 		}
 	}
 	return all, nil
@@ -87,8 +95,18 @@ func FindPeer(id *identity.Identity, match string, wait time.Duration, trust *id
 			peers = append(peers, p)
 		}
 	}
+	if DebugLog != nil {
+		DebugLog("FindPeer: 发现=%d 信任内=%d trust=%v", len(all), len(peers), trust != nil)
+	}
 	if match != "" {
 		if t := matchPeer(peers, match, trust); t == nil {
+			if DebugLog != nil {
+				ids := make([]string, len(peers))
+				for i, p := range peers {
+					ids[i] = p.Announce.Name + "/" + protocol.DisplayID(p.Announce.ID)
+				}
+				DebugLog("FindPeer: 匹配失败 match=%q 候选=[%s]", match, strings.Join(ids, ", "))
+			}
 			return Target{}, fmt.Errorf("未找到设备 %q", match)
 		} else {
 			UpdateIPCache(t.Announce.ID, net.JoinHostPort(t.IP, strconv.Itoa(t.Announce.Port)))

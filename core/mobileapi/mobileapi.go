@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -54,6 +55,29 @@ const (
 // pairDecisionTimeout 配对请求等待宿主裁决的时限，超时视为拒绝。
 // 用 var 而非 const：测试需要缩短它。
 var pairDecisionTimeout = 3 * time.Minute
+
+func init() { transfer.DebugLog = dbg }
+
+// dbg 调试输出：数据目录根的 columba-dbg.log（adb shell 可读）。
+// gomobile bind 不转发 stderr 到 logcat，log.Printf 在安卓上是黑洞。
+func dbg(format string, args ...any) {
+	msg := fmt.Sprintf("[columba-dbg] "+format, args...)
+	log.Printf("%s", msg)
+	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
+		// 0666 + Chmod：FUSE/sdcardfs 下 shell（ext_data_rw 组）要能 cat，
+		// 0600 会被拒；数据目录根与 files 根各写一份（ROM 权限行为不一）
+		for _, p := range []string{
+			filepath.Join(dir, "columba-dbg.log"),
+			filepath.Join(filepath.Dir(dir), "columba-dbg.log"),
+		} {
+			if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666); err == nil {
+				f.Chmod(0o666)
+				fmt.Fprintln(f, time.Now().Format("15:04:05.000"), msg)
+				f.Close()
+			}
+		}
+	}
+}
 
 // EventListener 事件回调（gomobile 接口，由 Kotlin 实现并注册）。
 // 全部在 Go goroutine 中异步调用，实现方不得假设调用线程。
@@ -475,22 +499,26 @@ func PairJoin(code string) (string, error) {
 	// 1) 地址缓存恰有一条：多半是此前发现/配过的设备，先直连验证（毫秒级）
 	if t, ok := soleCachedTarget(d); ok {
 		attempted = true
+		dbg("PairJoin: 缓存直连尝试 %s", t.Addr)
 		if name, err := transfer.Pair(ctx, d.id, d.trust, t, code); err == nil {
 			transfer.UpdateIPCache(t.ID, t.Addr)
 			st.dispatchChanged()
 			return name, nil
 		} else {
+			dbg("PairJoin: 缓存直连失败 err=%v", err)
 			lastErr = err
 		}
 	}
 	// 2) 发现快照恰有一台在线设备
 	if t, ok := st.soleLivePeer(); ok {
 		attempted = true
+		dbg("PairJoin: 快照在线设备 %s", t.Addr)
 		if name, err := transfer.Pair(ctx, d.id, d.trust, t, code); err == nil {
 			transfer.UpdateIPCache(t.ID, t.Addr)
 			st.dispatchChanged()
 			return name, nil
 		} else {
+			dbg("PairJoin: 快照直连失败 err=%v", err)
 			lastErr = err
 		}
 	}
@@ -501,6 +529,7 @@ func PairJoin(code string) (string, error) {
 	}
 	// 3) 完整发现（候选多于一份时不盲目尝试，交用户指定）
 	t, err := transfer.FindPeer(d.id, "", discoverWait, nil)
+	dbg("PairJoin: 完整发现 err=%v", err)
 	if err != nil {
 		return "", err
 	}
@@ -647,6 +676,7 @@ func SendText(targetID, text string) error {
 	}
 	peer := st.displayName(d, t)
 	if err := transfer.SendText(context.Background(), d.id, t, text); err != nil {
+		dbg("SendText 失败 target=%s err=%v", t.Addr, err)
 		return err
 	}
 	st.dispatchText("send", peer, text)
@@ -699,14 +729,19 @@ func (st *state) resolveTarget(d *deviceCtx, targetID string) (transfer.Target, 
 	}
 	// 1) 地址缓存直连（快速路径，TLS 握手验证身份）
 	if t, ok := transfer.CachedTarget(d.id, targetID); ok {
+		dbg("resolve: 缓存直连 %s", t.Addr)
 		return t, nil
 	}
 	// 2) 本进程发现快照按 ID/名称匹配
 	if t, ok := st.trackerMatch(d, targetID); ok {
+		dbg("resolve: 快照匹配 %s", t.Addr)
 		return t, nil
 	}
 	// 3) 完整发现（组播等待 + 子网探测兜底；只从已配对设备中选）
-	return transfer.FindPeer(d.id, targetID, discoverWait, d.trust)
+	dbg("resolve: 完整发现 targetID=%q", targetID)
+	t, err := transfer.FindPeer(d.id, targetID, discoverWait, d.trust)
+	dbg("resolve: FindPeer err=%v", err)
+	return t, err
 }
 
 // trackerMatch 在发现快照里按 ID（忽略分隔符/大小写）、设备名或本机备注名匹配。
