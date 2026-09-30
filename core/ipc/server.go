@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -166,6 +167,11 @@ func (s *Server) announceOnline(devID string) bool {
 	}
 	return false
 }
+
+// faviconIco 内嵌的应用图标（浏览器窗口/任务栏图标用）。
+//
+//go:embed favicon.ico
+var faviconIco []byte
 
 // PanelHash 内嵌面板内容的 SHA-256，供启动器判断 daemon 是否为旧版本。
 func PanelHash() string {
@@ -340,6 +346,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	switch {
+	case req.URL.Path == "/favicon.ico":
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.Write(faviconIco)
 	case req.URL.Path == "/userscript.user.js":
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Write([]byte(s.userscript()))

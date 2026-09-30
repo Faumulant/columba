@@ -13,12 +13,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 	"unicode/utf16"
+	"unsafe"
 
 	"fyne.io/systray"
+	"github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
@@ -190,20 +193,67 @@ func RemoveSendToLink(display string) error {
 	return nil
 }
 
-// OpenPanelWindow 用 Edge App 模式打开面板（独立应用窗口，无浏览器界面）；
-// 找不到 Edge 时退回默认浏览器。
+// OpenPanelWindow 打开原生 WebView2 面板窗口：鸽子窗口图标、无浏览器痕迹。
+// WebView2 运行时（Win10/11 预装）不可用时退回 Edge 应用窗口。
 func OpenPanelWindow(url string) error {
-	for _, p := range []string{
-		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
-		filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
-		filepath.Join(os.Getenv("LOCALAPPDATA"), `Microsoft\Edge\Application\msedge.exe`),
-	} {
-		if p != "" && func() bool { _, err := os.Stat(p); return err == nil }() {
-			return shellExecute("open", p, `--app="`+url+`" --window-size=920,680`)
+	go func() {
+		runtime.LockOSThread()
+		w := webview2.NewWithOptions(webview2.WebViewOptions{
+			AutoFocus: true,
+			WindowOptions: webview2.WindowOptions{
+				Title:  "Columba",
+				Width:  920,
+				Height: 680,
+				IconId: 1, // go-winres 写入的首个图标资源
+				Center: true,
+			},
+		})
+		if w == nil {
+			// WebView2 运行时缺失：退回 Edge 应用窗口（图标为默认地球）
+			shellExecute("open", url, "")
+			return
 		}
-	}
-	return shellExecute("open", url, "")
+		defer w.Destroy()
+		w.Navigate(url)
+		setWindowIcon(w.Window(), dropIco)
+		w.Run()
+	}()
+	return nil
 }
+
+// setWindowIcon 从内存 ICO 设置窗口的大/小图标（任务栏与标题栏）。
+func setWindowIcon(hwnd unsafe.Pointer, ico []byte) {
+	if len(ico) < 22 {
+		return
+	}
+	h := windows.HWND(hwnd)
+	for _, size := range []struct{ w, h, flag uintptr }{{16, 16, 0}, {48, 48, 1}} {
+		off, _, _ := procLookupIconIdFromDirectoryEx.Call(
+			uintptr(unsafe.Pointer(&ico[0])), 1,
+			size.w, size.h, 0)
+		if off == 0 {
+			continue
+		}
+		if int(off)+8 > len(ico) {
+			continue
+		}
+		hIcon, _, callErr := procCreateIconFromResourceEx.Call(
+			uintptr(unsafe.Pointer(&ico[off])),
+			uintptr(len(ico)-int(off)),
+			1, 0x00030000, size.w, size.h, 0)
+		if hIcon == 0 || callErr != nil {
+			continue
+		}
+		procSendMessageW.Call(uintptr(h), 0x0080 /*WM_SETICON*/, size.flag, hIcon)
+	}
+}
+
+var (
+	user32                          = windows.NewLazySystemDLL("user32.dll")
+	procLookupIconIdFromDirectoryEx = user32.NewProc("LookupIconIdFromDirectoryEx")
+	procCreateIconFromResourceEx    = user32.NewProc("CreateIconFromResourceEx")
+	procSendMessageW                = user32.NewProc("SendMessageW")
+)
 
 //go:embed icons/drop.ico
 var dropIco []byte // 内嵌的官方图标（托盘用）。
