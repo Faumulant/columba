@@ -9,3 +9,4 @@ dropw.exe
 *.exe~
 tmp_*.txt
 /tools/jdk-21/
+tmp_netwatch*
