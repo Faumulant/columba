@@ -65,10 +65,18 @@ fun SendSheet(
         scope.launch(Dispatchers.IO) {
             try {
                 val paths = ArrayList<String>(uris.size)
-                val dir = java.io.File(ctx.cacheDir, "sends").apply { mkdirs() }
+                // 每次发送独立子目录：保留原始文件名（Go 端按文件名传输），
+                // 时间戳目录避免多次发送同名互相覆盖
+                val dir = java.io.File(java.io.File(ctx.cacheDir, "sends"), System.nanoTime().toString())
+                dir.mkdirs()
                 for (u in uris) {
                     val name = sanitizeName(u.displayName(ctx))
-                    val f = java.io.File(dir, "${System.nanoTime()}_$name")
+                    var f = java.io.File(dir, name)
+                    var n = 1
+                    while (f.exists()) { // 同名去重
+                        f = java.io.File(dir, "($n) $name")
+                        n++
+                    }
                     ctx.contentResolver.openInputStream(u)?.use { input ->
                         f.outputStream().use { input.copyTo(it) }
                     } ?: continue
