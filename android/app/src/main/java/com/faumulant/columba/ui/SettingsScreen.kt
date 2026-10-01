@@ -196,11 +196,12 @@ fun SettingsScreen() {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("图片自动入相册", fontSize = 13.sp)
-                        Text(
-                            if (Build.VERSION.SDK_INT >= 29) "收到的图片同时写入系统相册"
-                            else "需要 Android 10 以上",
-                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
-                        )
+                        if (Build.VERSION.SDK_INT < 29) {
+                            Text(
+                                "需要 Android 10 以上",
+                                fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
                     }
                     Switch(
                         checked = settings.autoGallery && Build.VERSION.SDK_INT >= 29,
@@ -209,13 +210,9 @@ fun SettingsScreen() {
                         colors = monochromeSwitchColors(),
                     )
                 }
-                Text(
-                    "收到的文件先进入应用目录，再自动拷贝到所选文件夹；原始记录可在应用信息里清除",
-                    fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
-                )
             } else {
                 Text(
-                    "每条记录给「保存」按钮，由你选择保存位置；收到的文件暂存应用目录",
+                    "收到的文件暂存应用目录，点记录上的「保存」另存",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 10.dp),
                 )
@@ -230,10 +227,6 @@ fun SettingsScreen() {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("后台接收", fontSize = 13.sp)
-                    Text(
-                        if (Receiver.running) "接收运行中" else "接收未运行",
-                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
-                    )
                 }
                 Switch(
                     checked = settings.persistent,
@@ -255,7 +248,7 @@ fun SettingsScreen() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "电池优化白名单（避免 Doze 延迟接收）",
+                    "电池优化白名单（防止休眠时漏收）",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Icon(
@@ -269,7 +262,7 @@ fun SettingsScreen() {
         Card {
             Text("关于", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(10.dp))
-            Text("Columba（飞鸠）· 配对一次，即选即发", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Columba（飞鸠）· v${com.faumulant.columba.BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             // 本机名 + 改名入口（调 Go.setDeviceName，广播身份即时更新）
             Row(
@@ -291,9 +284,29 @@ fun SettingsScreen() {
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "ID ${self?.displayId ?: ""} · 版本 ${com.faumulant.columba.BuildConfig.VERSION_NAME} · 仅限局域网",
+                "不经任何服务器，仅局域网点对点直连",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
             )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        try {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Faumulant/columba")))
+                        } catch (_: Exception) {
+                        }
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("GitHub", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    Icons.Outlined.NorthEast, null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 6.dp).size(12.dp),
+                )
+            }
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -380,7 +393,7 @@ private fun AliasDialog(deviceName: String, onDismiss: () -> Unit, onSave: (Stri
         title = { Text("修改备注名") },
         text = {
             Column {
-                Text("给「$deviceName」起个本机备注；留空则恢复显示对方自报名。", fontSize = 13.sp)
+                Text("给「$deviceName」的备注仅自己可见；留空清除。", fontSize = 13.sp)
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = text,
@@ -560,7 +573,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                     Text(joinMsg!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 }
                 if (joining) {
-                    Text("正在配对（最长 90 秒）…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("正在配对…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         },
