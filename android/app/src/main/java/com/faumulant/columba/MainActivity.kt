@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -209,68 +210,68 @@ private enum class Tab { RECEIVE, SETTINGS }
 // 结构要点：外层 Box 不做任何裁切，FAB 叠在底条之上自然凸出（修复旧版 Surface 裁掉 FAB 顶部的问题）
 @Composable
 private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
+    // 底栏测量高度 = 底条 64dp + 手势条；内容区正好排到发丝线为止。
+    // FAB 用 offset 悬出测量区、压在滚动内容上——中间没有「死区」，
+    // 文字从 FAB 背后滚过、到发丝线被底条截住，日间/夜间都成立。
     Column(Modifier.fillMaxWidth()) {
-            Box(Modifier.fillMaxWidth().height(88.dp)) {
-                // 底条（64dp，贴底）：白底 + 顶部发丝线；上方 24dp 头部空间透出
-                // 页面底色，FAB 悬在页面上（日间不再多出一条白色带）
-                Column(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                ) {
-                    HorizontalDivider(color = HairlineColor)
-                    Row(
-                        Modifier.fillMaxWidth().weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        BottomItem(
-                            Modifier.weight(1f),
-                            label = "接收",
-                            selected = tab == Tab.RECEIVE,
-                            onClick = { onTab(Tab.RECEIVE) },
-                        ) { selected ->
-                            // 信封动画：未选中=闭合，选中=开盖（保留原有动效）
-                            AnimatedContent(
-                                targetState = selected,
-                                transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.7f)) togetherWith (fadeOut() + scaleOut(targetScale = 0.7f)) },
-                                label = "envelope",
-                            ) { sel ->
-                                Icon(
-                                    if (sel) Icons.Filled.Drafts else Icons.Filled.Email,
-                                    contentDescription = "接收",
-                                    modifier = Modifier.size(22.dp),
-                                    tint = if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.weight(1f)) // 中央 FAB 占位
-                        BottomItem(
-                            Modifier.weight(1f),
-                            label = "设置",
-                            selected = tab == Tab.SETTINGS,
-                            onClick = { onTab(Tab.SETTINGS) },
-                        ) { selected ->
-                            Icon(
-                                Icons.Filled.Settings,
-                                contentDescription = "设置",
-                                modifier = Modifier.size(22.dp),
-                                tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                            )
-                        }
+        Box(
+            Modifier.fillMaxWidth()
+                .height(64.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            HorizontalDivider(color = HairlineColor, modifier = Modifier.align(Alignment.TopCenter))
+            Row(
+                Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BottomItem(
+                    Modifier.weight(1f),
+                    label = "接收",
+                    selected = tab == Tab.RECEIVE,
+                    onClick = { onTab(Tab.RECEIVE) },
+                ) { selected ->
+                    // 信封动画：未选中=闭合，选中=开盖（保留原有动效）
+                    AnimatedContent(
+                        targetState = selected,
+                        transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.7f)) togetherWith (fadeOut() + scaleOut(targetScale = 0.7f)) },
+                        label = "envelope",
+                    ) { sel ->
+                        Icon(
+                            if (sel) Icons.Filled.Drafts else Icons.Filled.Email,
+                            contentDescription = "接收",
+                            modifier = Modifier.size(22.dp),
+                            tint = if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                        )
                     }
                 }
-                // 凸出 FAB：按压 ×0.92 弹簧回弹
-                PressFab(
-                    onClick = onFab,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
+                Spacer(Modifier.weight(1f)) // 中央 FAB 占位
+                BottomItem(
+                    Modifier.weight(1f),
+                    label = "设置",
+                    selected = tab == Tab.SETTINGS,
+                    onClick = { onTab(Tab.SETTINGS) },
+                ) { selected ->
+                    Icon(
+                        Icons.Filled.Settings,
+                        contentDescription = "设置",
+                        modifier = Modifier.size(22.dp),
+                        tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
-            // 手势条区域与底条同色，视觉连续到底
-            Spacer(
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .navigationBarsPadding()
+            // 凸出 FAB：上探 28dp 悬在内容上，按压 ×0.92 弹簧回弹
+            PressFab(
+                onClick = onFab,
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = (-28).dp),
             )
         }
+        // 手势条区域与底条同色，视觉连续到底
+        Spacer(
+            Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .navigationBarsPadding()
+        )
+    }
 }
 
 @Composable
