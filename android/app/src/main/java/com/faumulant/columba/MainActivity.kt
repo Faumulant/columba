@@ -184,8 +184,6 @@ class MainActivity : ComponentActivity() {
                 ) { t ->
                     when (t) {
                         Tab.RECEIVE -> ReceiveScreen(
-                            selectedTargetId = selectedTarget,
-                            onSelectTarget = onSelectTarget,
                             onSaveRecord = onSaveRecord,
                         )
                         Tab.SETTINGS -> SettingsScreen()

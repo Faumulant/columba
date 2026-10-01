@@ -3,11 +3,16 @@ package com.faumulant.columba.ui
 import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -65,12 +71,10 @@ import com.faumulant.columba.Receiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// 接收页：顶部目标设备下拉 + 商标斑鸠 / 五分类等宽 tabs / 记录列表（图片类带缩略图）
+// 接收页：顶部接收信标 + 商标斑鸠 / 五分类等宽 tabs / 记录列表（图片类带缩略图）
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ReceiveScreen(
-    selectedTargetId: String?,
-    onSelectTarget: (com.faumulant.columba.Device) -> Unit,
     onSaveRecord: (HistoryEntry) -> Unit,
 ) {
     var cat by remember { mutableIntStateOf(0) }
@@ -79,16 +83,13 @@ fun ReceiveScreen(
     val cats = HistoryEntry.Category.entries
 
     Column(Modifier.fillMaxSize()) {
-        // 头部：设备选择（左）+ 斑鸠商标（右，微倾斜，纯点缀不可点）
+        // 头部：接收信标（左，动=接收中 / 静=未接收）+ 斑鸠商标（右，点按切换外观）
         Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp, end = 14.dp),
+            Modifier.fillMaxWidth().padding(top = 4.dp, start = 14.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DeviceDropdown(
-                selectedId = selectedTargetId,
-                onSelect = onSelectTarget,
-                modifier = Modifier.weight(1f),
-            )
+            ReceiveBeacon()
+            Spacer(Modifier.weight(1f))
             Image(
                 painter = dovePainter(),
                 contentDescription = "切换日间/夜间外观",
@@ -395,4 +396,35 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
             { TextButton(onClick = onClose) { Text("关闭") } }
         } else null,
     )
+}
+
+// 左上角接收信标：呼吸点 + 扩散波纹（发丝线级）。动 = 接收中（哑光灰绿，
+// 本主题唯一允许的高亮色），静 = 未接收（灰点，纹丝不动）——动与静本身即状态。
+@Composable
+private fun ReceiveBeacon(modifier: Modifier = Modifier) {
+    val active = Receiver.running
+    val dot = if (active) SuccessColor else MaterialTheme.colorScheme.outline
+    val t = rememberInfiniteTransition(label = "beacon").animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
+        label = "beaconT",
+    ).value
+    Canvas(modifier.size(30.dp)) {
+        val dotR = 3.5.dp.toPx()
+        if (active) {
+            // 两圈波纹：半周期错相，向外扩散并渐隐
+            for (off in listOf(0f, 0.5f)) {
+                val p = (t + off) % 1f
+                drawCircle(
+                    color = dot,
+                    alpha = 0.30f * (1f - p),
+                    radius = dotR + p * (13.dp.toPx() - dotR),
+                    style = Stroke(width = 1.1.dp.toPx()),
+                )
+            }
+        }
+        // 呼吸：半径 ±8%；未接收时完全静止
+        val breathe = if (active) 1f + 0.08f * kotlin.math.sin(t * 2f * Math.PI.toFloat()) else 1f
+        drawCircle(color = dot, radius = dotR * breathe)
+    }
 }
