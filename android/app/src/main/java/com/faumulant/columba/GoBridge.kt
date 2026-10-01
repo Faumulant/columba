@@ -57,6 +57,7 @@ object Go {
     fun pairJoin(code: String): Result<String> = call { Mobileapi.pairJoin(code) }
     fun pairDecide(allow: Boolean): Result<Unit> = call { Mobileapi.pairDecide(allow) }
     fun removeDevice(id: String): Result<Unit> = call { Mobileapi.removeDevice(id) }
+    fun setAlias(idOrName: String, alias: String): Result<Unit> = call { Mobileapi.setAlias(idOrName, alias) }
 
     // ─── 发送 ──────────────────────────────────────────────────
 

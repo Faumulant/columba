@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.NorthEast
@@ -69,6 +70,7 @@ fun SettingsScreen() {
     var showAddDevice by remember { mutableStateOf(false) }
     var removeDev by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
     var showRename by remember { mutableStateOf(false) }
+    var aliasEdit by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
     val self = Bus.self
 
     fun update(s: AppSettings) {
@@ -116,6 +118,14 @@ fun SettingsScreen() {
                             color = if (d.online) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
                         )
                     }
+                    Icon(
+                        Icons.Filled.Edit, "改备注名",
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { aliasEdit = d },
+                    )
+                    Spacer(Modifier.width(14.dp))
                     Icon(
                         Icons.Filled.Delete, "移除",
                         tint = MaterialTheme.colorScheme.outline,
@@ -345,6 +355,47 @@ fun SettingsScreen() {
             dismissButton = { TextButton(onClick = { removeDev = null }) { Text("取消") } },
         )
     }
+
+    aliasEdit?.let { d ->
+        AliasDialog(
+            deviceName = d.name,
+            onDismiss = { aliasEdit = null },
+            onSave = { alias ->
+                aliasEdit = null
+                Thread {
+                    Go.setAlias(d.id, alias)
+                    Bus.refreshDevices()
+                }.start()
+            },
+        )
+    }
+}
+
+// 备注名弹窗：仅本机生效（优先于对方自报名显示），留空 = 清除备注恢复原名
+@Composable
+private fun AliasDialog(deviceName: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("修改备注名") },
+        text = {
+            Column {
+                Text("给「$deviceName」起个本机备注；留空则恢复显示对方自报名。", fontSize = 13.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text(deviceName) },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text.trim()) }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 // 本机改名：写入身份并刷新 Bus.self（其他设备看到的名字随之更新）

@@ -373,6 +373,10 @@ func (st *state) ensureDiscovery(auto bool) error {
 	go func() {
 		for e := range disc.Events() {
 			tr.Feed(e)
+			// 对端改名自动同步进信任库（备注名优先，不受影响）
+			if d.trust.RefreshName(e.Announce.ID, e.Announce.Name) {
+				st.dispatchChanged()
+			}
 		}
 	}()
 	go st.watchOnline(ctx)
@@ -452,6 +456,20 @@ func ListDevices() string {
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+// SetAlias 给已配对设备设置本机备注名（空串清除）；idOrName 支持 ID 或当前显示名。
+// 备注名仅本机生效，优先于对方自报名显示。
+func SetAlias(idOrName, alias string) error {
+	d, err := st.device()
+	if err != nil {
+		return err
+	}
+	if !d.trust.SetAlias(idOrName, alias) {
+		return fmt.Errorf("未找到设备 %q", idOrName)
+	}
+	st.dispatchChanged()
+	return nil
 }
 
 // RemoveDevice 移除一台已配对设备（双向信任需对方自行移除）。

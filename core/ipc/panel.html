@@ -32,6 +32,8 @@ body{background:var(--bg);color:var(--txt);height:100vh;overflow:hidden;user-sel
 .dev-item{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;font-size:13.5px}
 .dev-item:hover{background:var(--blue-soft)}
 .dev-item .id{margin-left:auto;font-size:11px;color:var(--sub)}
+.dev-alias{margin-left:6px;border:none;background:none;color:var(--sub);cursor:pointer;font-size:13px;padding:2px 5px;border-radius:6px;line-height:1}
+.dev-alias:hover{background:var(--blue-soft);color:#111827}
 
 /* ===== 主框架 ===== */
 .app{display:flex;height:calc(100vh - 58px)}
@@ -221,6 +223,17 @@ input.codein:focus{border-color:var(--blue)}
     </div>
     <button class="btn pri" style="width:100%;padding:10px" onclick="doUnlock()">解锁 3 台设备限制</button>
     <button class="btn" style="width:100%;padding:9px;margin-top:8px" onclick="ui('unlockMask',0)">关闭</button>
+  </div>
+</div>
+
+<div class="mask" id="aliasMask">
+  <div class="modal" style="width:320px">
+    <b>修改备注名</b>
+    <div style="font-size:12.5px;color:var(--sub);margin:10px 0 0">给「<b id="aliasDev">…</b>」起个本机备注；留空则恢复显示对方自报名。备注只在本机生效。</div>
+    <input id="aliasIn" maxlength="30" placeholder="备注名（留空清除）"
+      style="width:100%;box-sizing:border-box;font-size:14px;padding:10px 12px;margin:12px 0 2px;border:1.5px solid var(--line);border-radius:10px;outline:none">
+    <button class="btn pri" style="width:100%;padding:10px;margin-top:8px" onclick="aliasSave()">保存</button>
+    <button class="btn" style="width:100%;padding:9px;margin-top:8px" onclick="ui('aliasMask',0)">取消</button>
   </div>
 </div>
 
@@ -414,7 +427,7 @@ function devToggle(e) {
   if (d.classList.toggle("open")) {
     document.getElementById("devMenu").innerHTML = S.devices.map(d =>
       `<div class="dev-item" onclick='devPick(${jsStr(d.id)})'><span class="dot ${d.online ? "on" : "off"}"></span>
-       ${esc(d.name)}<span class="id">${d.online ? "在线" : "离线"}</span></div>`).join("")
+       ${esc(d.name)}<span class="id">${d.online ? "在线" : "离线"}</span><button class="dev-alias" title="修改备注名" onclick='event.stopPropagation();aliasOpen(${jsStr(d.id)},${jsStr(d.name)})'>✎</button></div>`).join("")
       || '<div class="dev-item">还没有已配对设备</div>';
   }
 }
@@ -422,6 +435,24 @@ function devPick(id) {
   j("select", {method:"POST", body:JSON.stringify({id})}).then(() => refresh());
   document.getElementById("dev").classList.remove("open");
 }
+let aliasId = "";
+function aliasOpen(id, name) {
+  aliasId = id;
+  document.getElementById("aliasDev").textContent = name;
+  document.getElementById("aliasIn").value = "";
+  document.getElementById("dev").classList.remove("open");
+  ui("aliasMask", 1);
+  setTimeout(() => document.getElementById("aliasIn").focus(), 60);
+}
+function aliasSave() {
+  const v = document.getElementById("aliasIn").value.trim();
+  j("alias", {method:"POST", body:JSON.stringify({id:aliasId, alias:v})})
+    .then(() => { ui("aliasMask", 0); toast("备注已保存"); refresh(); })
+    .catch(() => toast("保存失败", {err:true,sticky:true}));
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && document.getElementById("aliasMask").classList.contains("show")) aliasSave();
+});
 document.addEventListener("click", e => {
   if (!document.getElementById("dev").contains(e.target))
     document.getElementById("dev").classList.remove("open");

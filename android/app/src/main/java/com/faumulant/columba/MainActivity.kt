@@ -109,7 +109,10 @@ class MainActivity : ComponentActivity() {
     private fun AppRoot() {
         var tab by remember { mutableStateOf(Tab.RECEIVE) }
 
-        var selectedTarget by remember { mutableStateOf<String?>(null) }
+        // 上次选择的发送目标：启动恢复，选择时持久化（左上角下拉与发送面板共用）
+        var selectedTarget by remember {
+            mutableStateOf(AppSettings.load(applicationContext).lastTargetId.ifBlank { null })
+        }
         var showSend by remember { mutableStateOf(false) }
         val snackbar = remember { SnackbarHostState() }
         LaunchedEffect(Bus.snackbar) {
@@ -117,6 +120,24 @@ class MainActivity : ComponentActivity() {
                 snackbar.showSnackbar(it)
                 Bus.clearSnackbar()
             }
+        }
+
+        // 保存的设备可能已被移除：列表就绪后校验，失效则清空
+        LaunchedEffect(Bus.devices) {
+            val list = Bus.devices
+            if (list.isNotEmpty() && selectedTarget != null && list.none { it.id == selectedTarget }) {
+                selectedTarget = null
+            }
+        }
+
+        val onSelectTarget: (com.faumulant.columba.Device) -> Unit = { d ->
+            selectedTarget = d.id
+            Thread {
+                Go.setTarget(d.id)
+                applicationContext.saveSettings(
+                    AppSettings.load(applicationContext).copy(lastTargetId = d.id)
+                )
+            }.start()
         }
 
         // 手动保存（D3）：SAF 创建文档
@@ -164,10 +185,7 @@ class MainActivity : ComponentActivity() {
                     when (t) {
                         Tab.RECEIVE -> ReceiveScreen(
                             selectedTargetId = selectedTarget,
-                            onSelectTarget = { d ->
-                                selectedTarget = d.id
-                                Thread { Go.setTarget(d.id) }.start()
-                            },
+                            onSelectTarget = onSelectTarget,
                             onSaveRecord = onSaveRecord,
                         )
                         Tab.SETTINGS -> SettingsScreen()
@@ -179,10 +197,7 @@ class MainActivity : ComponentActivity() {
         if (showSend) {
             SendSheet(
                 selectedId = selectedTarget,
-                onSelectTarget = { d ->
-                    selectedTarget = d.id
-                    Thread { Go.setTarget(d.id) }.start()
-                },
+                onSelectTarget = onSelectTarget,
                 onDismiss = { showSend = false },
             )
         }

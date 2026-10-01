@@ -474,6 +474,17 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 			s.OnDeviceRemoved(display)
 		}
 		writeOK(w)
+	case req.URL.Path == "/api/alias" && req.Method == http.MethodPost:
+		var in struct {
+			ID    string `json:"id"`
+			Alias string `json:"alias"`
+		}
+		json.NewDecoder(req.Body).Decode(&in)
+		if !s.trust.SetAlias(in.ID, in.Alias) {
+			http.Error(w, "设备不存在", http.StatusNotFound)
+			return
+		}
+		writeOK(w)
 	case req.URL.Path == "/api/recvdir" && req.Method == http.MethodPost:
 		var in struct {
 			Dir string `json:"dir"`

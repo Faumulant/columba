@@ -13,6 +13,7 @@ data class AppSettings(
     val persistent: Boolean,
     val treeUri: String,         // 自动保存目标文件夹（SAF tree）
     val themeMode: String,       // "system" / "light" / "dark"（点右上角斑鸠切换）
+    val lastTargetId: String,    // 上次选择的发送目标（重启恢复）
 ) {
     val isAuto: Boolean get() = saveMode == "auto"
 
@@ -25,6 +26,7 @@ data class AppSettings(
                 persistent = p.getBoolean("persistent", false),
                 treeUri = p.getString("treeUri", "") ?: "",
                 themeMode = p.getString("themeMode", "system") ?: "system",
+                lastTargetId = p.getString("lastTargetId", "") ?: "",
             )
         }
     }
@@ -37,6 +39,7 @@ fun Context.saveSettings(s: AppSettings) {
         .putBoolean("persistent", s.persistent)
         .putString("treeUri", s.treeUri)
         .putString("themeMode", s.themeMode)
+        .putString("lastTargetId", s.lastTargetId)
         .apply()
 }
 

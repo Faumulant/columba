@@ -133,6 +133,23 @@ func (t *TrustStore) SetAlias(idOrName, alias string) bool {
 	return false
 }
 
+// RefreshName 宣告得知对端自报名变化时刷新缓存名，让改名自动跨设备同步
+//（无需重新配对）。备注名优先显示、永不被覆盖。返回是否发生了变更。
+func (t *TrustStore) RefreshName(id, name string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reloadLocked()
+	pid := protocol.NormalizeID(id)
+	p, ok := t.peers[pid]
+	if !ok || p.Alias != "" || name == "" || p.Name == name {
+		return false
+	}
+	p.Name = name
+	t.peers[pid] = p
+	t.saveLocked()
+	return true
+}
+
 // Remove 移除一台已信任设备（面板设备管理用）。
 func (t *TrustStore) Remove(id string) bool {
 	t.mu.Lock()
