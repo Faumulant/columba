@@ -18,6 +18,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -208,12 +209,13 @@ private enum class Tab { RECEIVE, SETTINGS }
 // 结构要点：外层 Box 不做任何裁切，FAB 叠在底条之上自然凸出（修复旧版 Surface 裁掉 FAB 顶部的问题）
 @Composable
 private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Column {
+    Column(Modifier.fillMaxWidth()) {
             Box(Modifier.fillMaxWidth().height(88.dp)) {
-                // 底条（64dp，贴底）
+                // 底条（64dp，贴底）：白底 + 顶部发丝线；上方 24dp 头部空间透出
+                // 页面底色，FAB 悬在页面上（日间不再多出一条白色带）
                 Column(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
                     HorizontalDivider(color = HairlineColor)
                     Row(
@@ -262,9 +264,13 @@ private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
             }
-            Spacer(Modifier.navigationBarsPadding())
+            // 手势条区域与底条同色，视觉连续到底
+            Spacer(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .navigationBarsPadding()
+            )
         }
-    }
 }
 
 @Composable
