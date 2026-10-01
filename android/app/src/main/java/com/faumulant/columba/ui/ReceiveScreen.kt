@@ -91,8 +91,11 @@ fun ReceiveScreen(
             )
             Image(
                 painter = dovePainter(),
-                contentDescription = null,
-                modifier = Modifier.size(28.dp).rotate(-8f),
+                contentDescription = "切换日间/夜间外观",
+                modifier = Modifier
+                    .size(28.dp)
+                    .rotate(-8f)
+                    .clickable { Bus.cycleTheme() },
             )
         }
 

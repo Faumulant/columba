@@ -26,9 +26,14 @@ object Bus : mobileapi.EventListener {
     var snackbar by mutableStateOf<String?>(null)
         private set
 
+    // 外观模式（"system"/"light"/"dark"）：点右上角斑鸠循环切换，Theme.kt 据此生效
+    var themeMode by mutableStateOf("system")
+        private set
+
     fun init(ctx: Context) {
         if (appCtx != null) return
         appCtx = ctx.applicationContext
+        themeMode = AppSettings.load(appCtx!!).themeMode
         // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，
         // 否则会回退到 cwd 下的 .drop 生成一套错误身份）
         Go.setDataDir(Receiver.dataDir(appCtx!!).absolutePath)
@@ -56,6 +61,25 @@ object Bus : mobileapi.EventListener {
         main.post { snackbar = msg }
     }
     fun clearSnackbar() { snackbar = null }
+
+    // 外观循环：跟随系统 → 日间 → 夜间 → …；立即持久化，snackbar 报当前模式
+    fun cycleTheme() {
+        val ctx = appCtx ?: return
+        val next = when (themeMode) {
+            "system" -> "light"
+            "light" -> "dark"
+            else -> "system"
+        }
+        themeMode = next
+        ctx.saveSettings(AppSettings.load(ctx).copy(themeMode = next))
+        showSnackbar(
+            "外观：" + when (next) {
+                "light" -> "日间"
+                "dark" -> "夜间"
+                else -> "跟随系统"
+            }
+        )
+    }
 
     // ─── EventListener（Go 回调，线程不保证） ─────────────────────
 

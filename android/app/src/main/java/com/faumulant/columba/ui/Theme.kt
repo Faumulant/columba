@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import com.faumulant.columba.Bus
 import com.faumulant.columba.R
 
 // 黑白单色优雅体系（2026-09 视觉定稿，取代原信使蓝）：
@@ -68,23 +69,32 @@ private val LightColors = lightColorScheme(
 val HandZh = FontFamily(Font(R.font.ma_shan_zheng))
 val HandEn = FontFamily(Font(R.font.caveat))
 
+// 生效暗色：手动模式（点斑鸠切换）优先，跟随系统兜底。
+// 全文件所有明暗分支都走这里，保证切换单一来源。
+@Composable
+fun isAppDark(): Boolean = when (Bus.themeMode) {
+    "light" -> false
+    "dark" -> true
+    else -> isSystemInDarkTheme()
+}
+
 // 设计稿之外的语义色：成功（哑光灰绿）。失败直接用 colorScheme.error。
 val SuccessColor: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF8FAE8B) else Color(0xFF5F7A5B)
+    @Composable get() = if (isAppDark()) Color(0xFF8FAE8B) else Color(0xFF5F7A5B)
 
 // 发丝边框（卡片/描边按钮共用）：比 outlineVariant 更轻一点
 val HairlineColor: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0x14FFFFFF) else Color(0x14000000)
+    @Composable get() = if (isAppDark()) Color(0x14FFFFFF) else Color(0x14000000)
 
 // 商标斑鸠：深底白鸽 / 浅底黑鸽（透明剪影，res/drawable-nodpi）
 @Composable
 fun dovePainter(): Painter =
-    painterResource(if (isSystemInDarkTheme()) R.drawable.dove_white else R.drawable.dove_black)
+    painterResource(if (isAppDark()) R.drawable.dove_white else R.drawable.dove_black)
 
 @Composable
 fun ColumbaTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = if (isAppDark()) DarkColors else LightColors,
         content = content,
     )
 }
