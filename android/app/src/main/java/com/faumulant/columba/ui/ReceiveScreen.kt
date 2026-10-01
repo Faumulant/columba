@@ -85,7 +85,7 @@ fun ReceiveScreen(
     Column(Modifier.fillMaxSize()) {
         // 头部：接收信标（左，动=接收中 / 静=未接收）+ 斑鸠商标（右，点按切换外观）
         Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp, start = 14.dp, end = 14.dp),
+            Modifier.fillMaxWidth().padding(top = 4.dp, start = 18.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ReceiveBeacon()
@@ -409,8 +409,8 @@ private fun ReceiveBeacon(modifier: Modifier = Modifier) {
         animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
         label = "beaconT",
     ).value
-    Canvas(modifier.size(30.dp)) {
-        val dotR = 3.5.dp.toPx()
+    Canvas(modifier.size(36.dp)) {
+        val dotR = 4.2.dp.toPx()
         if (active) {
             // 两圈波纹：半周期错相，向外扩散并渐隐
             for (off in listOf(0f, 0.5f)) {
@@ -418,8 +418,8 @@ private fun ReceiveBeacon(modifier: Modifier = Modifier) {
                 drawCircle(
                     color = dot,
                     alpha = 0.30f * (1f - p),
-                    radius = dotR + p * (13.dp.toPx() - dotR),
-                    style = Stroke(width = 1.1.dp.toPx()),
+                    radius = dotR + p * (15.5.dp.toPx() - dotR),
+                    style = Stroke(width = 1.2.dp.toPx()),
                 )
             }
         }
