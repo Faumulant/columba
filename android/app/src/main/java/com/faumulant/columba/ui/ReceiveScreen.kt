@@ -83,7 +83,7 @@ fun ReceiveScreen(
     val cats = HistoryEntry.Category.entries
 
     Column(Modifier.fillMaxSize()) {
-        // 头部：接收信标（左，动=接收中 / 静=未接收）+ 斑鸠商标（右，点按切换外观）
+        // 头部：连接信标（左，动=有设备在线 / 静=无设备在线）+ 斑鸠商标（右，点按切换外观）
         Row(
             Modifier.fillMaxWidth().padding(top = 4.dp, start = 18.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -398,11 +398,12 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
     )
 }
 
-// 左上角接收信标：呼吸点 + 扩散波纹（发丝线级）。动 = 接收中（哑光灰绿，
-// 本主题唯一允许的高亮色），静 = 未接收（灰点，纹丝不动）——动与静本身即状态。
+// 左上角连接信标：呼吸点 + 扩散波纹（发丝线级）。动 = 有配对设备在线
+// （哑光灰绿，随时可发），静 = 无设备在线（灰点，纹丝不动）——用户最初
+// 提的「显示是否连接」，数据源 = 配对设备的在线状态（每 2 秒比对）。
 @Composable
 private fun ReceiveBeacon(modifier: Modifier = Modifier) {
-    val active = Receiver.running
+    val active = Bus.devices.any { it.online }
     val dot = if (active) SuccessColor else MaterialTheme.colorScheme.outline
     val t = rememberInfiniteTransition(label = "beacon").animateFloat(
         initialValue = 0f, targetValue = 1f,

@@ -646,7 +646,9 @@ function refresh() {
     const tdev = (S.devices || []).find(d => d.id === S.target);
     document.getElementById("devDot").className = "dot " + (tdev && tdev.online ? "on" : "off");
     document.getElementById("devName").textContent = targetName();
-    const sig = JSON.stringify([st.devices, st.history, st.target, st.recv_dir, st.unlocked]);
+    // 设备在线状态不参与整页重绘的判定：列表内容只来自历史记录，
+    // 在线抖动只影响顶栏圆点（上面已直接更新），避免无谓的整页闪烁
+    const sig = JSON.stringify([st.history, st.target, st.recv_dir, st.unlocked]);
     if (sig === lastSig.v) return;
     const ae = document.activeElement;
     if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) return;
