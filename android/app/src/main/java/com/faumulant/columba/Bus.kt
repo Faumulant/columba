@@ -26,10 +26,6 @@ object Bus : mobileapi.EventListener {
     var snackbar by mutableStateOf<String?>(null)
         private set
 
-    // 键盘高度（px，主窗口 inset）：ModalBottomSheet 的独立窗口不派发
-    // IME inset，发送面板从这里取值做避让。MainActivity 监听并写入。
-    var imeBottomPx by mutableStateOf(0)
-
     // 外观模式（"system"/"light"/"dark"）：点右上角斑鸠循环切换，Theme.kt 据此生效
     var themeMode by mutableStateOf("system")
         private set

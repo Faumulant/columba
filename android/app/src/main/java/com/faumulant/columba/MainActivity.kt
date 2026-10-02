@@ -1,15 +1,12 @@
 package com.faumulant.columba
 
 import android.content.Intent
-import android.view.View
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
@@ -78,13 +75,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 沉浸式：状态栏/导航栏透出背景色，消除顶部白条
         enableEdgeToEdge()
-        // 主窗口 edge-to-edge 能拿到真实键盘高度；ModalBottomSheet 的独立
-        // 窗口不派发 IME inset（面板内读出来恒为 0），面板经 Bus 取此值
-        val root = findViewById<View>(android.R.id.content)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            Bus.imeBottomPx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-            insets
-        }
         openReceiveTab = intent?.getStringExtra("open") == "receive"
         Bus.init(applicationContext)
         Notifier.ensureChannels(this)

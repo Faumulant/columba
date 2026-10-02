@@ -9,11 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,9 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.faumulant.columba.Bus
@@ -108,10 +102,7 @@ fun SendSheet(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(bottom = with(LocalDensity.current) { Bus.imeBottomPx.toDp() })
-                .padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             // 目标行：标签在左，设备选择在右
@@ -142,27 +133,13 @@ fun SendSheet(
                 )
             }
 
-            // 文本框随内容自动长高：无键盘时封顶 ≈ 屏高四成；键盘弹出时上限
-            // 随键盘高度收缩（310dp ≈ 面板其余元素 + 顶栏预留），保证「发送」
-            // 按钮与咕咕咕提示始终在键盘上方可见。超出封顶后由外层
-            // verticalScroll 接管滚动——它正确参与嵌套滚动，文本滚到边界
-            // 手势才交还面板，不再出现「翻文本拽动整个面板」。
-            val cfg = LocalConfiguration.current
-            // 键盘高度来自主窗口监听（Bus.imeBottomPx）——本弹窗独立窗口不派发 IME inset
-            val imeDp = with(LocalDensity.current) { Bus.imeBottomPx.toDp() }
-            val fieldCap = ((cfg.screenHeightDp * 0.40f)
-                .coerceAtMost(cfg.screenHeightDp - imeDp.value - 310f)
-                .coerceAtLeast(96f)).dp
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it; sendError = null },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 84.dp, max = fieldCap)
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("说点什么…（可选）", color = MaterialTheme.colorScheme.outline) },
                 minLines = 3,
-                maxLines = Int.MAX_VALUE,
+                maxLines = 6,
                 enabled = !busy,
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
