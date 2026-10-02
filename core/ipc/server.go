@@ -32,6 +32,8 @@ import (
 
 const (
 	deviceLimit      = 3
+	// Version 应用版本：/api/state 下发，面板关于卡显示；发版时同步更新
+	Version = "0.1"
 	ipcPreferredPort = 42709
 )
 
@@ -626,6 +628,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"target":             cfg.Target,
 		"recv_dir":           cfg.RecvDir,
 		"unlocked":           identity.IsUnlocked(),
+		"version":            Version,
 		"limit":              deviceLimit,
 		"ext_dir":            FirefoxExtDir(),
 		"ext_dir_chromium":   chromiumExtDir(),
