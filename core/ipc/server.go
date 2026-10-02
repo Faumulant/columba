@@ -123,6 +123,85 @@ func (s *Server) TouchPanel() {
 // StartProber 面板打开期间每 30 秒后台探测一次缺失设备的地址，
 // 结果写入 probeSeen 供 onlineSet 读取；面板关闭时探测自动停止。
 // 注意：探测是对全网段的端口扫描，频率不宜再高，避免被安全软件误判。
+// StartUpdateCheck 定时查询 GitHub 最新发布版本；仓库未公开、无网络、
+// 限流时一律静默跳过（latestVer 保持空，面板不提示）。仅记录比当前
+// 版本新的 tag，下载与安装由用户在浏览器手动完成。
+func (s *Server) StartUpdateCheck(ctx context.Context) {
+	go func() {
+		time.Sleep(15 * time.Second) // 启动后稍等，网络就绪
+		for {
+			s.checkLatestOnce()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(6 * time.Hour):
+			}
+		}
+	}()
+}
+
+func (s *Server) checkLatestOnce() {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/Faumulant/columba/releases/latest", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var v struct {
+		TagName string `json:"tag_name"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&v) != nil {
+		return
+	}
+	tag := strings.TrimPrefix(strings.TrimSpace(v.TagName), "v")
+	if tag == "" || !versionNewer(Version, tag) {
+		return
+	}
+	s.latestMu.Lock()
+	s.latestTag = tag
+	s.latestAt = time.Now()
+	s.latestMu.Unlock()
+}
+
+func (s *Server) latestVer() string {
+	s.latestMu.Lock()
+	defer s.latestMu.Unlock()
+	return s.latestTag
+}
+
+// versionNewer 语义化版本比较（按数字段逐段比较）：latest 是否比 cur 新。
+func versionNewer(cur, latest string) bool {
+	nums := func(v string) (out []int) {
+		for _, p := range strings.Split(v, ".") {
+			n, _ := strconv.Atoi(strings.TrimSpace(p))
+			out = append(out, n)
+		}
+		return
+	}
+	a, b := nums(cur), nums(latest)
+	for i := 0; i < len(a) || i < len(b); i++ {
+		x, y := 0, 0
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if y != x {
+			return y > x
+		}
+	}
+	return false
+}
+
 func (s *Server) StartProber(ctx context.Context) {
 	go func() {
 		tick := time.NewTicker(30 * time.Second)
@@ -230,6 +309,10 @@ type Server struct {
 
 	probeMu   sync.Mutex
 	probeSeen map[string]time.Time
+
+	latestMu     sync.Mutex
+	latestTag    string    // GitHub 上比当前版本新的 tag（无/未知 = 空串）
+	latestAt     time.Time // 上次检查时间，避免频繁请求
 	panelAt   time.Time // 最近一次面板访问
 
 	OnShutdown func() // daemon 收到关闭指令时回调（启动器接线到退出流程）
@@ -629,6 +712,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"recv_dir":           cfg.RecvDir,
 		"unlocked":           identity.IsUnlocked(),
 		"version":            Version,
+		"latest":             s.latestVer(),
 		"limit":              deviceLimit,
 		"ext_dir":            FirefoxExtDir(),
 		"ext_dir_chromium":   chromiumExtDir(),

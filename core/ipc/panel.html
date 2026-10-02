@@ -465,7 +465,9 @@ function renderSet(m) {
    <div class="setcard">
     <div class="setrow"><span class="k">Columba（飞鸠）· v${S.version || "0.1"}</span>
     <span class="v">不经任何服务器，仅局域网点对点直连</span>
-    <button class="btn" onclick='dropURL("open","https://github.com/Faumulant/columba")'>GitHub ↗</button></div>
+    <button class="btn ${S.latest && S.latest !== (S.version || "0.1") ? "pri" : ""}"
+      title="${S.latest ? "打开 releases 页面下载新版本" : "项目仓库"}"
+      onclick='dropURL("open","https://github.com/Faumulant/columba/releases/latest")'>${S.latest && S.latest !== (S.version || "0.1") ? "有新版本 v" + S.latest + " ↗" : "GitHub ↗"}</button></div>
    </div></div>`;
 }
 
