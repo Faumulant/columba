@@ -194,16 +194,19 @@ func RemoveSendToLink(display string) error {
 }
 
 // OpenPanelWindow 打开原生 WebView2 面板窗口：鸽子窗口图标、无浏览器痕迹。
+// 尺寸 = 上次记忆的逻辑尺寸 × 系统缩放比例（DPI 感知，见 trackPanelSize）。
 // WebView2 运行时（Win10/11 预装）不可用时退回 Edge 应用窗口。
 func OpenPanelWindow(url string) error {
 	go func() {
 		runtime.LockOSThread()
+		lw, lh := panelLogicalSize()
+		scale := systemDpiScale()
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			AutoFocus: true,
 			WindowOptions: webview2.WindowOptions{
 				Title:  "Columba",
-				Width:  920,
-				Height: 680,
+				Width:  uint(float64(lw) * scale),
+				Height: uint(float64(lh) * scale),
 				IconId: 1, // go-winres 写入的首个图标资源
 				Center: true,
 			},
@@ -216,9 +219,69 @@ func OpenPanelWindow(url string) error {
 		defer w.Destroy()
 		w.Navigate(url)
 		setWindowIcon(w.Window(), dropIco)
+		go trackPanelSize(w.Window(), scale) // 记录尺寸，下次按上次大小打开
 		w.Run()
 	}()
 	return nil
+}
+
+var (
+	procGetDpiForSystem = user32.NewProc("GetDpiForSystem")
+	procGetWindowRect   = user32.NewProc("GetWindowRect")
+)
+
+type winRect struct{ L, T, R, B int32 }
+
+// systemDpiScale 系统显示缩放比例（96dpi = 1.0）。
+func systemDpiScale() float64 {
+	d, _, _ := procGetDpiForSystem.Call()
+	if d == 0 {
+		return 1.0
+	}
+	s := float64(d) / 96.0
+	if s < 1.0 {
+		s = 1.0
+	}
+	return s
+}
+
+// panelLogicalSize 上次面板窗口的逻辑尺寸（跨会话记忆），无记录或越界回默认。
+func panelLogicalSize() (int, int) {
+	if b, err := os.ReadFile(filepath.Join(identity.AppDir(), "panel_window.json")); err == nil {
+		var v struct {
+			W int `json:"w"`
+			H int `json:"h"`
+		}
+		if json.Unmarshal(b, &v) == nil && v.W >= 500 && v.H >= 400 && v.W <= 5000 && v.H <= 4000 {
+			return v.W, v.H
+		}
+	}
+	return 920, 680
+}
+
+// trackPanelSize 面板打开期间轮询窗口矩形，变化时以逻辑像素持久化；
+// GetWindowRect 失败（窗口已销毁）即退出。
+func trackPanelSize(hwnd unsafe.Pointer, scale float64) {
+	last := ""
+	for {
+		time.Sleep(500 * time.Millisecond)
+		var rc winRect
+		if r, _, _ := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc))); r == 0 {
+			return
+		}
+		w := int(float64(rc.R-rc.L) / scale)
+		h := int(float64(rc.B-rc.T) / scale)
+		key := fmt.Sprintf("%dx%d", w, h)
+		if key == last {
+			continue
+		}
+		last = key
+		b, _ := json.Marshal(struct {
+			W int `json:"w"`
+			H int `json:"h"`
+		}{w, h})
+		_ = os.WriteFile(filepath.Join(identity.AppDir(), "panel_window.json"), b, 0o644)
+	}
 }
 
 // setWindowIcon 从内存 ICO 设置窗口的大/小图标（任务栏与标题栏）。
