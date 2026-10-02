@@ -218,7 +218,7 @@ func (r *Receiver) handleText(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "文本为空", http.StatusBadRequest)
 		return
 	}
-	peer := senderName(req)
+	peer := r.peerName(req)
 	history.Append(history.Entry{Dir: "recv", Peer: peer, Kind: "text", Status: "ok", Text: text})
 	if r.opt.OnText != nil {
 		r.opt.OnText(peer, text)
@@ -360,7 +360,7 @@ func (r *Receiver) handleOffer(w http.ResponseWriter, req *http.Request) {
 	r.mu.Unlock()
 
 	fmt.Fprintf(os.Stderr, "收到 %s 的发送请求：%d 个文件，共 %s，自动接收\n",
-		senderName(req), len(off.Files), protocol.HumanBytes(off.TotalSize))
+		r.peerName(req), len(off.Files), protocol.HumanBytes(off.TotalSize))
 	writeJSON(w, protocol.OfferAck{SessionID: sid})
 }
 
@@ -411,7 +411,7 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		st.file, st.hash = nil, nil
 		r.mu.Unlock()
-		r.record(senderName(req), st.meta.Path, st.meta.Size, false, msg)
+		r.record(r.peerName(req), st.meta.Path, st.meta.Size, false, msg)
 		http.Error(w, msg, code)
 	}
 	n, err := io.Copy(io.MultiWriter(st.file, st.hash), io.LimitReader(req.Body, st.meta.Size+1))
@@ -467,7 +467,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	computed := hex.EncodeToString(st.hash.Sum(nil))
 	if !strings.EqualFold(computed, cr.SHA256) {
 		os.Remove(st.part)
-		r.record(senderName(req), st.meta.Path, st.meta.Size, false, "SHA-256 校验失败")
+		r.record(r.peerName(req), st.meta.Path, st.meta.Size, false, "SHA-256 校验失败")
 		writeJSON(w, protocol.CompleteAck{Message: "SHA-256 校验失败，文件已丢弃"})
 		return
 	}
@@ -487,10 +487,10 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		os.RemoveAll(partDir(r.dir(), cr.SessionID)) // 会话结束，清理暂存目录
 	}
 	savedPath := filepath.Join(r.dir(), final)
-	r.record(senderName(req), filepath.Base(final), st.meta.Size, true, "")
+	r.record(r.peerName(req), filepath.Base(final), st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
 	if r.opt.OnReceived != nil {
-		r.opt.OnReceived(senderName(req), filepath.Base(final), savedPath)
+		r.opt.OnReceived(r.peerName(req), filepath.Base(final), savedPath)
 	}
 	writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(final)})
 }
@@ -544,9 +544,15 @@ func peerID(req *http.Request) string {
 	return ""
 }
 
-func senderName(req *http.Request) string {
+// peerName 对端显示名：信任库备注/自报名优先（跟随对端改名自动同步），
+// 证书 CN 兜底——CN 在身份创建时定格，对端改名后不再变化，故仅作最后回退。
+func (r *Receiver) peerName(req *http.Request) string {
 	if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
-		if n := req.TLS.PeerCertificates[0].Subject.CommonName; n != "" {
+		cert := req.TLS.PeerCertificates[0]
+		if n := r.trust.Name(identity.Fingerprint(cert)); n != "" {
+			return n
+		}
+		if n := cert.Subject.CommonName; n != "" {
 			return n
 		}
 	}

@@ -147,13 +147,17 @@ func (s *Server) StartProber(ctx context.Context) {
 			if !need {
 				continue
 			}
-			if found, err := transfer.Probe(s.id); err == nil {
-				s.probeMu.Lock()
-				for _, t := range found {
-					s.probeSeen[protocol.NormalizeID(t.ID)] = time.Now()
-				}
-				s.probeMu.Unlock()
+		if found, err := transfer.Probe(s.id); err == nil {
+			s.probeMu.Lock()
+			// 整体替换为最新一轮探测结果：本轮找到 = 在线（保持到下轮），
+			// 本轮没找到 = 离线。不再按时间过期，消除扫描期间的假离线。
+			seen := map[string]time.Time{}
+			for _, t := range found {
+				seen[protocol.NormalizeID(t.ID)] = time.Now()
 			}
+			s.probeSeen = seen
+			s.probeMu.Unlock()
+		}
 		}
 	}()
 }
@@ -626,8 +630,9 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// onlineSet 已配对设备中确认存活的集合。宣告 6 秒内视为在线；
-// 有设备不在线且距上次探测超过 10 秒时自动补一次子网探测。
+// onlineSet 已配对设备中确认存活的集合：宣告窗口（20 秒）内听到宣告，
+// 或最近一次后台探测确认存活（结果保持到下次探测整体替换——避免探测
+// 扫描期间出现「假离线」导致面板状态闪烁）。
 func (s *Server) onlineSet() map[string]bool {
 	s.probeMu.Lock()
 	defer s.probeMu.Unlock()
@@ -635,12 +640,8 @@ func (s *Server) onlineSet() map[string]bool {
 	for _, info := range s.peers.Snapshot() {
 		online[protocol.NormalizeID(info.Announce.ID)] = true
 	}
-	for id, t := range s.probeSeen { // 后台探测结果缓存 30 秒
-		if time.Since(t) < 30*time.Second {
-			online[id] = true
-		} else {
-			delete(s.probeSeen, id)
-		}
+	for id := range s.probeSeen {
+		online[id] = true
 	}
 	return online
 }
