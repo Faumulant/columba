@@ -638,7 +638,7 @@ window.addEventListener("drop", e => {
   }).catch(() => toast("发送失败", {err:true,sticky:true}));
 });
 /* 状态轮询：数据变化且未在交互时才重绘 */
-const lastSig = {v: ""};
+const lastSig = {v: "", dev: ""};
 let renderKey = "";
 function refresh() {
   api("state").then(r => r.json()).then(st => {
@@ -648,6 +648,13 @@ function refresh() {
     document.getElementById("devName").textContent = targetName();
     // 设备在线状态不参与整页重绘的判定：列表内容只来自历史记录，
     // 在线抖动只影响顶栏圆点（上面已直接更新），避免无谓的整页闪烁
+    // 设备列表变化（移除/备注/改名同步）：设置视图的设备管理卡需刷新，
+    // 列表视图不受影响（顶栏圆点已在上面直接更新）
+    const devSig = JSON.stringify(st.devices);
+    if (devSig !== lastSig.dev) {
+      lastSig.dev = devSig;
+      if (view === "set") { render(); return; }
+    }
     const sig = JSON.stringify([st.history, st.target, st.recv_dir, st.unlocked]);
     if (sig === lastSig.v) return;
     const ae = document.activeElement;
