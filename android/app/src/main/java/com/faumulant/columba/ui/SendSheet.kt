@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -112,7 +110,7 @@ fun SendSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .imePadding() // 键盘弹出时面板整体上移：文本框与发送按钮不被键盘遮挡
+                .padding(bottom = with(LocalDensity.current) { Bus.imeBottomPx.toDp() })
                 .padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -150,7 +148,8 @@ fun SendSheet(
             // verticalScroll 接管滚动——它正确参与嵌套滚动，文本滚到边界
             // 手势才交还面板，不再出现「翻文本拽动整个面板」。
             val cfg = LocalConfiguration.current
-            val imeDp = with(LocalDensity.current) { WindowInsets.ime.getBottom(this).toDp() }
+            // 键盘高度来自主窗口监听（Bus.imeBottomPx）——本弹窗独立窗口不派发 IME inset
+            val imeDp = with(LocalDensity.current) { Bus.imeBottomPx.toDp() }
             val fieldCap = ((cfg.screenHeightDp * 0.40f)
                 .coerceAtMost(cfg.screenHeightDp - imeDp.value - 310f)
                 .coerceAtLeast(96f)).dp
