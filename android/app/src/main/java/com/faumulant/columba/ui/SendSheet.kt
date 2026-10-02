@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.faumulant.columba.Bus
@@ -141,11 +144,16 @@ fun SendSheet(
                 )
             }
 
-            // 文本框随内容自动长高（minLines 起步，heightIn 封顶 ≈ 屏高四成，
-            // 保证面板展开后信标/斑鸠仍完整可见）；超出封顶后由外层
+            // 文本框随内容自动长高：无键盘时封顶 ≈ 屏高四成；键盘弹出时上限
+            // 随键盘高度收缩（310dp ≈ 面板其余元素 + 顶栏预留），保证「发送」
+            // 按钮与咕咕咕提示始终在键盘上方可见。超出封顶后由外层
             // verticalScroll 接管滚动——它正确参与嵌套滚动，文本滚到边界
             // 手势才交还面板，不再出现「翻文本拽动整个面板」。
-            val fieldCap = (LocalConfiguration.current.screenHeightDp * 0.40f).dp
+            val cfg = LocalConfiguration.current
+            val imeDp = with(LocalDensity.current) { WindowInsets.ime.getBottom(this).toDp() }
+            val fieldCap = ((cfg.screenHeightDp * 0.40f)
+                .coerceAtMost(cfg.screenHeightDp - imeDp.value - 310f)
+                .coerceAtLeast(96f)).dp
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it; sendError = null },

@@ -149,11 +149,17 @@ func (s *Server) StartProber(ctx context.Context) {
 			}
 		if found, err := transfer.Probe(s.id); err == nil {
 			s.probeMu.Lock()
-			// 整体替换为最新一轮探测结果：本轮找到 = 在线（保持到下轮），
-			// 本轮没找到 = 离线。不再按时间过期，消除扫描期间的假离线。
+			// 整体替换为最新一轮探测结果：本轮找到 = 在线（保持到下轮）。
+			// 本轮没扫到的旧条目保留一轮宽限（Wi-Fi 探测偶发超时），
+			// 连续两轮缺失才判离线——消除扫描期间的假离线闪烁。
 			seen := map[string]time.Time{}
 			for _, t := range found {
 				seen[protocol.NormalizeID(t.ID)] = time.Now()
+			}
+			for id, ts := range s.probeSeen {
+				if _, ok := seen[id]; !ok && time.Since(ts) < 65*time.Second {
+					seen[id] = ts
+				}
 			}
 			s.probeSeen = seen
 			s.probeMu.Unlock()
