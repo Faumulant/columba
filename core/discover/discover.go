@@ -22,7 +22,10 @@ const (
 	MulticastAddr = "224.0.0.240:42708"
 	MulticastPort = 42708
 	AnnounceEvery = 2 * time.Second
-	ExpireAfter   = 6 * time.Second
+	// ExpireAfter 在线判定窗口：组播在 Wi-Fi 上有丢包（部分路由器不转发
+	// 无线组播），窗口过窄会导致在线状态反复横跳（面板反复重绘）。20 秒
+	// ≈ 连续丢失 9 次宣告才判离线。
+	ExpireAfter = 20 * time.Second
 )
 
 // Event 收到的一条设备宣告。

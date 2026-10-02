@@ -395,7 +395,12 @@ function tcard(e, i) {
 function render() {
   const m = document.getElementById("main");
   if (!S) return;
-  if (view === "set") return renderSet(m);
+  // 同页重绘（轮询刷新）保留滚动位置；切视图/分类/筛选才回顶部
+  const key = view + ":" + cat + ":" + filt + ":" + (manage ? 1 : 0);
+  const samePage = key === renderKey;
+  renderKey = key;
+  const keepScroll = samePage ? m.scrollTop : 0;
+  if (view === "set") { renderSet(m); m.scrollTop = keepScroll; return; }
   if (cat === "txt") {
     const texts = textList();
     m.innerHTML = `<div class="head"><h1>文本</h1>${segHTML()}
@@ -404,6 +409,7 @@ function render() {
      <div class="bar"><button class="btn pri" onclick="sendText()">发送</button></div></div>
      <div class="list" style="padding-top:0">${texts.map(tcard).join("") ||
        '<div class="empty">该筛选下暂无文本<div class="quote">waiting for a drop…</div></div>'}</div>`;
+    m.scrollTop = keepScroll;
     return;
   }
   const all = S.history.filter(e => e.kind !== "text" && catOf(e) === cat);
@@ -411,6 +417,7 @@ function render() {
   m.innerHTML = `<div class="head"><h1>${TITLES[cat]}</h1>${segHTML()}
    <span class="count">${all.length} 条</span><span class="flex"></span>${manageControls()}</div>
    <div class="list">${rows || '<div class="empty">该筛选下暂无传输<div class="quote">waiting for a drop…</div></div>'}</div>`;
+  m.scrollTop = keepScroll;
 }
 function renderSet(m) {
   const lim = S.unlocked ? "∞" : S.limit;
@@ -632,6 +639,7 @@ window.addEventListener("drop", e => {
 });
 /* 状态轮询：数据变化且未在交互时才重绘 */
 const lastSig = {v: ""};
+let renderKey = "";
 function refresh() {
   api("state").then(r => r.json()).then(st => {
     S = st;
