@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,13 +137,21 @@ fun SendSheet(
                 )
             }
 
+            // 文本框随内容自动长高（minLines 起步，heightIn 封顶 ≈ 屏高四成，
+            // 保证面板展开后信标/斑鸠仍完整可见）；超出封顶后由外层
+            // verticalScroll 接管滚动——它正确参与嵌套滚动，文本滚到边界
+            // 手势才交还面板，不再出现「翻文本拽动整个面板」。
+            val fieldCap = (LocalConfiguration.current.screenHeightDp * 0.40f).dp
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it; sendError = null },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 84.dp, max = fieldCap)
+                    .verticalScroll(rememberScrollState()),
                 placeholder = { Text("说点什么…（可选）", color = MaterialTheme.colorScheme.outline) },
                 minLines = 3,
-                maxLines = 6,
+                maxLines = Int.MAX_VALUE,
                 enabled = !busy,
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
