@@ -387,22 +387,27 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                         Spacer(Modifier.height(4.dp))
                         TextButton(onClick = {
                             val f = java.io.File(entry.path)
+                            val ext = f.extension.lowercase()
+                            val mime = android.webkit.MimeTypeMap.getSingleton()
+                                .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+                            if (mime == "application/octet-stream") {
+                                // 无已知类型：不启动（荣耀系统会兜底跳文件管理器选择页，
+                                // 用户感知为「什么都没发生」），直接给出明确提示
+                                Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
+                                return@TextButton
+                            }
                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                 ctx, "com.faumulant.columba.fileprovider", f
                             )
-                            val mime = android.webkit.MimeTypeMap.getSingleton()
-                                .getMimeTypeFromExtension(f.extension.lowercase())
-                                ?: "application/octet-stream"
                             val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
                                 .setDataAndType(uri, mime)
                                 .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             try {
                                 ctx.startActivity(i)
                             } catch (e: android.content.ActivityNotFoundException) {
-                                Toast.makeText(ctx, "手机上没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
-                                // 诊断模式：把真实异常亮出来，定位后换回友好提示
-                                Toast.makeText(ctx, "打开失败：${e.javaClass.simpleName} ${e.message ?: ""}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(ctx, "打开失败：${e.message ?: ""}", Toast.LENGTH_SHORT).show()
                             }
                         }) {
                             Icon(Icons.Filled.Launch, null, modifier = Modifier.size(16.dp))
