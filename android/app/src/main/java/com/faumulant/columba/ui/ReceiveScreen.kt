@@ -386,12 +386,16 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                     if (entry.status == "ok" && entry.path.isNotEmpty()) {
                         Spacer(Modifier.height(4.dp))
                         TextButton(onClick = {
-                            val f = java.io.File(entry.path)
+                            // 老版本历史条目的 path 存的是接收目录（已修），补上文件名即可打开
+                            var f = java.io.File(entry.path)
+                            if (f.isDirectory) f = java.io.File(f, entry.name)
                             val ext = f.extension.lowercase()
                             val mime = mimeForName(f.name)
+                            android.util.Log.d("ColumbaOpen", "tap path=${entry.path} ext=$ext mime=$mime")
                             if (mime == "application/octet-stream") {
                                 // 无已知类型：不启动（荣耀系统会兜底跳文件管理器选择页，
                                 // 用户感知为「什么都没发生」），直接给出明确提示
+                                android.util.Log.d("ColumbaOpen", "octet-stream 拒发")
                                 Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
                                 return@TextButton
                             }
@@ -401,11 +405,15 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                             val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
                                 .setDataAndType(uri, mime)
                                 .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            android.util.Log.d("ColumbaOpen", "uri=$uri")
                             try {
                                 ctx.startActivity(i)
+                                android.util.Log.d("ColumbaOpen", "startActivity 成功")
                             } catch (e: android.content.ActivityNotFoundException) {
+                                android.util.Log.d("ColumbaOpen", "ANFE", e)
                                 Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
+                                android.util.Log.d("ColumbaOpen", "fail", e)
                                 Toast.makeText(ctx, "打开失败：${e.message ?: ""}", Toast.LENGTH_SHORT).show()
                             }
                         }) {

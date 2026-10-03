@@ -411,7 +411,7 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		st.file, st.hash = nil, nil
 		r.mu.Unlock()
-		r.record(r.peerName(req), st.meta.Path, st.meta.Size, false, msg)
+		r.record(r.peerName(req), st.meta.Path, "", st.meta.Size, false, msg)
 		http.Error(w, msg, code)
 	}
 	n, err := io.Copy(io.MultiWriter(st.file, st.hash), io.LimitReader(req.Body, st.meta.Size+1))
@@ -467,7 +467,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	computed := hex.EncodeToString(st.hash.Sum(nil))
 	if !strings.EqualFold(computed, cr.SHA256) {
 		os.Remove(st.part)
-		r.record(r.peerName(req), st.meta.Path, st.meta.Size, false, "SHA-256 校验失败")
+		r.record(r.peerName(req), st.meta.Path, "", st.meta.Size, false, "SHA-256 校验失败")
 		writeJSON(w, protocol.CompleteAck{Message: "SHA-256 校验失败，文件已丢弃"})
 		return
 	}
@@ -487,7 +487,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		os.RemoveAll(partDir(r.dir(), cr.SessionID)) // 会话结束，清理暂存目录
 	}
 	savedPath := filepath.Join(r.dir(), final)
-	r.record(r.peerName(req), filepath.Base(final), st.meta.Size, true, "")
+		r.record(r.peerName(req), filepath.Base(final), final, st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
 	if r.opt.OnReceived != nil {
 		r.opt.OnReceived(r.peerName(req), filepath.Base(final), savedPath)
@@ -495,8 +495,8 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(final)})
 }
 
-func (r *Receiver) record(peer, name string, size int64, ok bool, errMsg string) {
-	e := history.Entry{Dir: "recv", Peer: peer, Name: name, Size: size, Status: "failed", Path: r.dir()}
+func (r *Receiver) record(peer, name, path string, size int64, ok bool, errMsg string) {
+	e := history.Entry{Dir: "recv", Peer: peer, Name: name, Size: size, Status: "failed", Path: path}
 	if ok {
 		e.Status = "ok"
 	} else {
