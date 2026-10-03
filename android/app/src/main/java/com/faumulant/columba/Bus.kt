@@ -1,6 +1,10 @@
 package com.faumulant.columba
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
@@ -63,7 +67,41 @@ object Bus : mobileapi.EventListener {
         self = Go.selfInfo()
     }
 
-    fun refreshDevices() { devices = Go.listDevices() }
+    fun refreshDevices() {
+        devices = Go.listDevices()
+        pushShareShortcuts()
+    }
+
+    // Direct Share：把每台已配对设备注册为系统分享面板的直达目标
+    //（其他 app 点分享 → 顶部直接出现「发送给 设备名」→ 内容直接进入发送流程）。
+    // 设备列表（ID/名字）变化时才推送，在线抖动不触发。
+    private var pushedShareSig = ""
+    private fun pushShareShortcuts() {
+        val ctx = appCtx ?: return
+        val sig = devices.joinToString("|") { it.id + it.name }
+        if (sig == pushedShareSig || devices.isEmpty()) return
+        pushedShareSig = sig
+        try {
+            val shortcuts = devices.take(4).map { d ->
+                ShortcutInfoCompat.Builder(ctx, "share-${d.id.take(16)}")
+                    .setShortLabel("发送给 ${d.name}")
+                    .setLongLabel("用 Columba 发送给 ${d.name}")
+                    .setIcon(IconCompat.createWithResource(ctx, R.mipmap.ic_launcher))
+                    .setIntent(
+                        Intent(ctx, MainActivity::class.java).apply {
+                            action = Intent.ACTION_SEND
+                            type = "*/*"
+                        }
+                    )
+                    .setLongLived(true)
+                    .addCapabilityBinding("actions.intent.SEND")
+                    .build()
+            }
+            ShortcutInfoCompat.pushDynamicShortcuts(ctx, shortcuts)
+        } catch (_: Exception) {
+            // 某些 ROM 限制快捷方式数量/能力时静默放弃（不影响普通分享路径）
+        }
+    }
     fun refreshHistory() { history = Go.history() }
 
     fun showSnackbar(msg: String) {
