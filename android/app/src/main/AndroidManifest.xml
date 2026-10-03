@@ -37,6 +37,17 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 详情弹窗「打开」按钮：以 content:// 授权外部应用读取收到的文件 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.faumulant.columba.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="false">

@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Launch
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.AlertDialog
@@ -382,6 +383,29 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                 } else {
                     if (entry.path.isNotEmpty()) Text("已存到 ${entry.path}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (entry.error.isNotEmpty()) Text("错误：${entry.error}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    if (entry.status == "ok" && entry.path.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        TextButton(onClick = {
+                            val f = java.io.File(entry.path)
+                            val uri = androidx.core.content.FileProvider.getUriForFile(
+                                ctx, "com.faumulant.columba.fileprovider", f
+                            )
+                            val mime = android.webkit.MimeTypeMap.getSingleton()
+                                .getMimeTypeFromExtension(f.extension.lowercase())
+                                ?: "application/octet-stream"
+                            val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                .setDataAndType(uri, mime)
+                                .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            try {
+                                ctx.startActivity(i)
+                            } catch (e: Exception) {
+                                Toast.makeText(ctx, "没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
+                            }
+                        }) {
+                            Icon(Icons.Filled.Launch, null, modifier = Modifier.size(16.dp))
+                            Text("打开", modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
                 }
             }
         },
