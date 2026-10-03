@@ -5,7 +5,6 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.util.concurrent.Executors
@@ -67,9 +66,5 @@ object AutoSaver {
         }
     }
 
-    fun mimeOf(name: String): String {
-        val ext = name.substringAfterLast('.', "").lowercase()
-        val m = if (ext.isNotEmpty()) MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) else null
-        return m ?: "application/octet-stream"
-    }
+    fun mimeOf(name: String): String = mimeForName(name)
 }

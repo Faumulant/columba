@@ -108,6 +108,31 @@ fun fmtTimeFull(iso: String): String = try {
     iso
 }
 
+// 部分 ROM（荣耀 MagicOS/Android 16 实测）的 MimeTypeMap 对常见扩展名也返回
+// null，这里内置兜底表；命中 octet-stream 的冷门类型由调用方提示不可打开。
+private val MIME_FALLBACK = mapOf(
+    "jpg" to "image/jpeg", "jpeg" to "image/jpeg", "png" to "image/png",
+    "gif" to "image/gif", "webp" to "image/webp", "bmp" to "image/bmp",
+    "heic" to "image/heic", "svg" to "image/svg+xml",
+    "mp4" to "video/mp4", "mkv" to "video/x-matroska", "mov" to "video/quicktime",
+    "avi" to "video/x-msvideo", "webm" to "video/webm",
+    "mp3" to "audio/mpeg", "flac" to "audio/flac", "wav" to "audio/x-wav",
+    "m4a" to "audio/mp4", "ogg" to "audio/ogg", "aac" to "audio/mp4a-latm",
+    "pdf" to "application/pdf", "txt" to "text/plain",
+    "zip" to "application/zip", "doc" to "application/msword", "docx" to
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls" to "application/vnd.ms-excel", "xlsx" to
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+// 按文件名解析 MIME 类型：系统表 → 内置兜底表 → 通用二进制
+fun mimeForName(name: String): String {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    val sys = if (ext.isNotEmpty()) android.webkit.MimeTypeMap.getSingleton()
+        .getMimeTypeFromExtension(ext) else null
+    return sys ?: MIME_FALLBACK[ext] ?: "application/octet-stream"
+}
+
 fun fmtSize(bytes: Long): String {
     if (bytes <= 0) return ""
     val units = arrayOf("B", "KB", "MB", "GB")

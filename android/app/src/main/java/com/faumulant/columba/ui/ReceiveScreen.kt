@@ -388,8 +388,7 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                         TextButton(onClick = {
                             val f = java.io.File(entry.path)
                             val ext = f.extension.lowercase()
-                            val mime = android.webkit.MimeTypeMap.getSingleton()
-                                .getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+                            val mime = mimeForName(f.name)
                             if (mime == "application/octet-stream") {
                                 // 无已知类型：不启动（荣耀系统会兜底跳文件管理器选择页，
                                 // 用户感知为「什么都没发生」），直接给出明确提示
