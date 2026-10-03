@@ -107,7 +107,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return
 		}
-		fmt.Fprintln(f, time.Now().Format("01-02 15:04:05.000")+fmt.Sprintf(format, args...))
+		fmt.Fprintln(f, time.Now().Format("01-02 15:04:05.000 ")+fmt.Sprintf(format, args...))
 		f.Close()
 	}
 	transfer.DebugLog("daemon 启动 port=%d pid=%d", *port, os.Getpid())
