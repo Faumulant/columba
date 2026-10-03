@@ -97,7 +97,8 @@ object Bus : mobileapi.EventListener {
                     .addCapabilityBinding("actions.intent.SEND")
                     .build()
             }
-            ShortcutInfoCompat.pushDynamicShortcuts(ctx, shortcuts)
+            val sm = ctx.getSystemService(Context.SHORTCUT_SERVICE) as android.content.pm.ShortcutManager
+            sm.setDynamicShortcuts(shortcuts.map { it.toShortcutInfo() })
         } catch (_: Exception) {
             // 某些 ROM 限制快捷方式数量/能力时静默放弃（不影响普通分享路径）
         }
