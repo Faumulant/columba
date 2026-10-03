@@ -82,6 +82,8 @@ func (l *testListener) OnPairRequest(peerName, peerID string) bool {
 	}
 }
 
+func (l *testListener) OnProgress(dir, peer, name string, done, total int64) {}
+
 func (l *testListener) OnDeviceChanged() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
