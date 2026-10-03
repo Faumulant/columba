@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
+import com.faumulant.columba.ui.mimeForName
 import java.io.File
 import java.util.concurrent.Executors
 
