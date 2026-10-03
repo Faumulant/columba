@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         openReceiveTab = intent?.getStringExtra("open") == "receive"
         Bus.init(applicationContext)
+        parseShare(intent)?.let { Bus.pushShare(it) }
         Notifier.ensureChannels(this)
         setContent { ColumbaTheme { AppRoot() } }
     }
@@ -84,6 +85,24 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         openReceiveTab = intent.getStringExtra("open") == "receive"
+        parseShare(intent)?.let { Bus.pushShare(it) }
+    }
+
+    // 解析系统分享（SEND / SEND_MULTIPLE）：文本或一个/多个内容 URI
+    private fun parseShare(intent: Intent?): Bus.SharePayload? {
+        intent ?: return null
+        val action = intent.action ?: return null
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        val streams: List<Uri> = if (action == Intent.ACTION_SEND_MULTIPLE) {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
+        } else {
+            @Suppress("DEPRECATION")
+            listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+        }
+        if (text == null && streams.isEmpty()) return null
+        return Bus.SharePayload(text = text, uris = streams)
     }
 
     override fun onStart() {
@@ -128,6 +147,11 @@ class MainActivity : ComponentActivity() {
             if (list.isNotEmpty() && selectedTarget != null && list.none { it.id == selectedTarget }) {
                 selectedTarget = null
             }
+        }
+
+        // 系统分享进入：切到接收页并弹出发送面板（内容已预填）
+        LaunchedEffect(Bus.shareIntent) {
+            if (Bus.shareIntent != null) { tab = Tab.RECEIVE; showSend = true }
         }
 
         val onSelectTarget: (com.faumulant.columba.Device) -> Unit = { d ->
@@ -196,7 +220,8 @@ class MainActivity : ComponentActivity() {
             SendSheet(
                 selectedId = selectedTarget,
                 onSelectTarget = onSelectTarget,
-                onDismiss = { showSend = false },
+                shared = Bus.shareIntent,
+                onDismiss = { showSend = false; Bus.consumeShare() },
             )
         }
 

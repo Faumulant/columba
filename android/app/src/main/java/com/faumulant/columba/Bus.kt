@@ -26,6 +26,15 @@ object Bus : mobileapi.EventListener {
     var snackbar by mutableStateOf<String?>(null)
         private set
 
+    // 系统分享暂存：其他 app「分享到 Columba」的内容（MainActivity 解析写入，
+    // 发送面板读取预填后 consumeShare 清空）
+    data class SharePayload(val text: String? = null, val uris: List<android.net.Uri> = emptyList())
+
+    var shareIntent by mutableStateOf<SharePayload?>(null)
+        private set
+    fun pushShare(p: SharePayload) { shareIntent = p }
+    fun consumeShare() { shareIntent = null }
+
     // 外观模式（"system"/"light"/"dark"）：点右上角斑鸠循环切换，Theme.kt 据此生效
     var themeMode by mutableStateOf("system")
         private set

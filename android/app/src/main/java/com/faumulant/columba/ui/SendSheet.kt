@@ -50,51 +50,26 @@ fun SendSheet(
     selectedId: String?,
     onSelectTarget: (Device) -> Unit,
     onDismiss: () -> Unit,
+    shared: Bus.SharePayload? = null,
 ) {
     val ctx = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(shared?.text ?: "") }
     var busy by remember { mutableStateOf(false) }
-    var pickedNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 暂存的待发文件（选择器选取 / 系统分享预填），点「发送」才落盘并发出
+    var staged by remember {
+        mutableStateOf<List<Pair<Uri, String>>>(
+            shared?.uris?.map { it to it.displayName(ctx) } ?: emptyList()
+        )
+    }
     var sendError by remember { mutableStateOf<String?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        pickedNames = uris.map { it.displayName(ctx) }
+        staged = uris.map { it to it.displayName(ctx) }
         sendError = null
-        busy = true
-        scope.launch(Dispatchers.IO) {
-            try {
-                val paths = ArrayList<String>(uris.size)
-                // 每次发送独立子目录：保留原始文件名（Go 端按文件名传输），
-                // 时间戳目录避免多次发送同名互相覆盖
-                val dir = java.io.File(java.io.File(ctx.cacheDir, "sends"), System.nanoTime().toString())
-                dir.mkdirs()
-                for (u in uris) {
-                    val name = sanitizeName(u.displayName(ctx))
-                    var f = java.io.File(dir, name)
-                    var n = 1
-                    while (f.exists()) { // 同名去重
-                        f = java.io.File(dir, "($n) $name")
-                        n++
-                    }
-                    ctx.contentResolver.openInputStream(u)?.use { input ->
-                        f.outputStream().use { input.copyTo(it) }
-                    } ?: continue
-                    paths.add(f.absolutePath)
-                }
-                val r = Go.sendFiles(selectedId ?: "", paths)
-                withContext2 {
-                    if (r.isSuccess) onDismiss() else sendError = "发送失败：${r.exceptionOrNull()?.message}"
-                }
-            } catch (e: Exception) {
-                withContext2 { sendError = "发送失败：${e.message}" }
-            } finally {
-                withContext2 { busy = false }
-            }
-        }
     }
 
     ModalBottomSheet(
@@ -126,9 +101,9 @@ fun SendSheet(
                 Icon(Icons.Filled.AttachFile, null, modifier = Modifier.size(16.dp))
                 Text("选择文件", fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
             }
-            if (pickedNames.isNotEmpty()) {
+            if (staged.isNotEmpty()) {
                 Text(
-                    "已选：${pickedNames.joinToString("、")}",
+                    "已选：${staged.joinToString("、") { it.second }}",
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
                 )
             }
@@ -152,21 +127,55 @@ fun SendSheet(
             Button(
                 onClick = {
                     val t = text.trim()
-                    if (t.isEmpty()) return@Button
+                    val uris = staged.map { it.first }
+                    if (t.isEmpty() && uris.isEmpty()) return@Button
                     sendError = null
                     busy = true
                     scope.launch(Dispatchers.IO) {
-                        val r = Go.sendText(selectedId ?: "", t)
-                        launch(Dispatchers.Main) {
-                            busy = false
-                            if (r.isSuccess) {
-                                text = ""
-                                onDismiss()
-                            } else sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                        try {
+                            var ok = true
+                            if (uris.isNotEmpty()) {
+                                // 每次发送独立子目录：保留原始文件名（Go 端按文件名传输），
+                                // 时间戳目录避免多次发送同名互相覆盖
+                                val dir = java.io.File(java.io.File(ctx.cacheDir, "sends"), System.nanoTime().toString())
+                                dir.mkdirs()
+                                val paths = ArrayList<String>(uris.size)
+                                for (u in uris) {
+                                    val name = sanitizeName(u.displayName(ctx))
+                                    var f = java.io.File(dir, name)
+                                    var n = 1
+                                    while (f.exists()) { // 同名去重
+                                        f = java.io.File(dir, "($n) $name")
+                                        n++
+                                    }
+                                    ctx.contentResolver.openInputStream(u)?.use { input ->
+                                        f.outputStream().use { input.copyTo(it) }
+                                    } ?: continue
+                                    paths.add(f.absolutePath)
+                                }
+                                val r = Go.sendFiles(selectedId ?: "", paths)
+                                ok = r.isSuccess
+                                if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                            }
+                            if (ok && t.isNotEmpty()) {
+                                val r = Go.sendText(selectedId ?: "", t)
+                                ok = r.isSuccess
+                                if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                            }
+                            withContext2 {
+                                if (ok) {
+                                    text = ""
+                                    onDismiss()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            withContext2 { sendError = "发送失败：${e.message}" }
+                        } finally {
+                            withContext2 { busy = false }
                         }
                     }
                 },
-                enabled = !busy && text.isNotBlank(),
+                enabled = !busy && (text.isNotBlank() || staged.isNotEmpty()),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(12.dp),
             ) {
