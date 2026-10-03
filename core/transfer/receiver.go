@@ -414,7 +414,8 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		r.record(r.peerName(req), st.meta.Path, "", st.meta.Size, false, msg)
 		http.Error(w, msg, code)
 	}
-	n, err := io.Copy(io.MultiWriter(st.file, st.hash), io.LimitReader(req.Body, st.meta.Size+1))
+	src := &progressReader{r: io.LimitReader(req.Body, st.meta.Size+1), total: st.meta.Size, dir: "recv", peer: r.peerName(req), name: filepath.Base(st.meta.Path)}
+	n, err := io.Copy(io.MultiWriter(st.file, st.hash), src)
 	if err != nil {
 		discard(http.StatusBadGateway, "传输中断，已丢弃不完整文件")
 		return

@@ -56,7 +56,13 @@ const (
 // 用 var 而非 const：测试需要缩短它。
 var pairDecisionTimeout = 3 * time.Minute
 
-func init() { transfer.DebugLog = dbg }
+func init() {
+	transfer.DebugLog = dbg
+	// 传输进度：转发给宿主事件（Bus 更新通知进度条）
+	transfer.ProgressHook = func(dir, peer, name string, done, total int64) {
+		st.dispatchProgress(dir, peer, name, done, total)
+	}
+}
 
 // dbg 调试输出：数据目录根的 columba-dbg.log（adb shell 可读）。
 // gomobile bind 不转发 stderr 到 logcat，log.Printf 在安卓上是黑洞。
@@ -93,6 +99,9 @@ type EventListener interface {
 	OnPairRequest(peerName string, peerID string) bool
 	// OnDeviceChanged 设备列表/在线状态发生变化（配对成功、移除、上下线）。
 	OnDeviceChanged()
+	// OnProgress 传输进行中（约 800ms 节流一次；done==total 由 OnTransfer 收尾）。
+	// done/total 为当前文件的字节进度。
+	OnProgress(dir string, peer string, name string, done int64, total int64)
 }
 
 type deviceCtx struct {
@@ -863,6 +872,19 @@ func (st *state) dispatchTransfer(dir, peer, name, path string, size int64, ok b
 	go func() {
 		defer recoverPanic("OnTransfer")
 		l.OnTransfer(dir, peer, name, path, size, ok, errInfo)
+	}()
+}
+
+func (st *state) dispatchProgress(dir, peer, name string, done, total int64) {
+	st.mu.Lock()
+	l := st.listener
+	st.mu.Unlock()
+	if l == nil {
+		return
+	}
+	go func() {
+		defer recoverPanic("OnProgress")
+		l.OnProgress(dir, peer, name, done, total)
 	}()
 }
 

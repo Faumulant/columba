@@ -131,9 +131,17 @@ object Bus : mobileapi.EventListener {
 
     // ─── EventListener（Go 回调，线程不保证） ─────────────────────
 
+    override fun onProgress(dir: String, peer: String, name: String, done: Long, total: Long) {
+        main.post {
+            val ctx = appCtx ?: return@post
+            if (total > 0) Notifier.progress(ctx, dir, name, (done * 100 / total).toInt())
+        }
+    }
+
     override fun onTransfer(dir: String, peer: String, name: String, path: String, size: Long, ok: Boolean, errInfo: String) {
         val ctx = appCtx ?: return
         main.post {
+            Notifier.cancelProgress(ctx)
             refreshHistory()
             if (dir == "recv") {
                 if (ok) {

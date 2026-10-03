@@ -13,6 +13,7 @@ object Notifier {
     const val CH_STATUS = "status"      // 低重要度：常驻“正在等待接收”
     const val CH_TRANSFER = "transfer"  // 默认重要度：传输完成
     const val ID_STATUS = 1
+    const val ID_PROGRESS = 90
     private var seq = 100
 
     fun ensureChannels(ctx: Context) {
@@ -38,6 +39,31 @@ object Notifier {
             },
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
+
+    // 传输进行中：常驻进度条（收发共用一条，完成/失败时由 onTransfer 取消）
+    fun progress(ctx: Context, dir: String, name: String, pct: Int) {
+        val title = if (dir == "recv") "正在接收 $name" else "正在发送 $name"
+        val n = NotificationCompat.Builder(ctx, CH_TRANSFER)
+            .setSmallIcon(R.drawable.ic_stat_columba)
+            .setContentTitle(title)
+            .setProgress(100, pct.coerceIn(0, 100), false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+        try {
+            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(ID_PROGRESS, n)
+        } catch (_: SecurityException) {
+        }
+    }
+
+    fun cancelProgress(ctx: Context) {
+        try {
+            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .cancel(ID_PROGRESS)
+        } catch (_: Exception) {
+        }
+    }
 
     fun notifyReceived(ctx: Context, name: String, peer: String, isText: Boolean) {
         if (!AppSettings.load(ctx).persistent) return // 仅常驻模式下走系统通知（前台有 snackbar）

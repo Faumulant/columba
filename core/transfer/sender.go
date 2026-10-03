@@ -296,10 +296,10 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	fmt.Fprintf(os.Stderr, "开始传输 %d 个文件，共 %s\n", len(items), protocol.HumanBytes(total))
 	var firstErr error
 	for _, it := range items {
-		err := uploadOne(ctx, client, t.Addr, ack.SessionID, it)
+		err := uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
 		if err != nil && IsRetryable(err) && ctx.Err() == nil {
 			time.Sleep(600 * time.Millisecond) // 网络抖动：同一文件整传重试一次
-			err = uploadOne(ctx, client, t.Addr, ack.SessionID, it)
+			err = uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
 		}
 		if err != nil {
 			firstErr = err
@@ -316,7 +316,7 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	return name, nil
 }
 
-func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item) error {
+func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item, peer string) error {
 	f, err := os.Open(it.local)
 	if err != nil {
 		return err
@@ -324,7 +324,7 @@ func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it it
 	defer f.Close()
 
 	h := sha256.New()
-	pr := &progressReader{r: io.TeeReader(f, h), total: it.meta.Size}
+	pr := &progressReader{r: io.TeeReader(f, h), total: it.meta.Size, dir: "send", peer: peer, name: filepath.Base(it.meta.Path)}
 	stop := pr.startLog()
 	defer stop()
 
@@ -480,10 +480,16 @@ func errBody(resp *http.Response) string {
 	return fmt.Sprintf("%s: %s", resp.Status, msg)
 }
 
+// ProgressHook 传输进度回调：dir 为 "send"/"recv"，done/total 为当前文件的
+// 字节进度。由宿主按需设置（手机端联动通知进度条，PC 端暂未使用）；
+// 约 800ms 节流一次，传输结束由宿主的完成事件收尾。
+var ProgressHook func(dir, peer, name string, done, total int64)
+
 type progressReader struct {
-	r     io.Reader
-	total int64
-	done  atomic.Int64
+	r               io.Reader
+	total           int64
+	done            atomic.Int64
+	dir, peer, name string
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
@@ -499,12 +505,24 @@ func (p *progressReader) startLog() func() {
 	go func() {
 		tick := time.NewTicker(800 * time.Millisecond)
 		defer tick.Stop()
+		last := int64(-1) // 上次上报的百分比（节流）
 		for {
 			select {
 			case <-done:
 				return
 			case <-tick.C:
 				fmt.Fprintf(os.Stderr, "\r  %s / %s", protocol.HumanBytes(p.done.Load()), protocol.HumanBytes(p.total))
+				if ProgressHook != nil {
+					done := p.done.Load()
+					pct := int64(0)
+					if p.total > 0 {
+						pct = done * 100 / p.total
+					}
+					if pct != last {
+						last = pct
+						ProgressHook(p.dir, p.peer, p.name, done, p.total)
+					}
+				}
 			}
 		}
 	}()
