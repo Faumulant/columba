@@ -398,8 +398,11 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
                                 .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             try {
                                 ctx.startActivity(i)
+                            } catch (e: android.content.ActivityNotFoundException) {
+                                Toast.makeText(ctx, "手机上没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
-                                Toast.makeText(ctx, "没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
+                                // 诊断模式：把真实异常亮出来，定位后换回友好提示
+                                Toast.makeText(ctx, "打开失败：${e.javaClass.simpleName} ${e.message ?: ""}", Toast.LENGTH_LONG).show()
                             }
                         }) {
                             Icon(Icons.Filled.Launch, null, modifier = Modifier.size(16.dp))
