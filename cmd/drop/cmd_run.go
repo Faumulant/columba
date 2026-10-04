@@ -124,7 +124,7 @@ func cmdRun(args []string) error {
 			for e := range disc.Events() {
 				peers.Feed(e)
 				// 对端改名自动同步进信任库（备注名优先，不受影响）
-				trust.RefreshName(e.Announce.ID, e.Announce.Name)
+				trust.RefreshName(e.Announce.ID, e.Announce.Name, e.IP)
 			}
 		}()
 	}

@@ -521,31 +521,31 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(req.Context(), 90*time.Second)
 		defer cancel()
-		// 配对码本身就是验证：逐个尝试可发现的设备，
-		// 错误的设备会返回"配对码无效"，正确的设备接受。
+		// 配对码本身就是验证，但绝不能广播给所有候选设备——同网攻击者
+		// 伪造宣告即可截获配对码并被静默信任（配对劫持）。候选不唯一
+		// 一律中止，交由用户确认唯一在线后再试（与手机端设计一致）。
 		cands, err := transfer.FindCandidates(s.id, 7*time.Second)
 		if err != nil {
 			writeJSON(w, map[string]any{"ok": false, "message": errMsg(err)})
 			return
 		}
-		var name string
-		var lastErr error
+		var targets []discover.PeerInfo
 		for _, t := range cands {
-			if protocol.NormalizeID(t.Announce.ID) == protocol.NormalizeID(s.id.ID()) {
-				continue
-			}
-			var n string
-			if n, lastErr = transfer.Pair(ctx, s.id, s.trust, targetOfInfo(t), in.Code); lastErr == nil {
-				name = n
-				break
+			if protocol.NormalizeID(t.Announce.ID) != protocol.NormalizeID(s.id.ID()) {
+				targets = append(targets, t)
 			}
 		}
-		if name == "" {
-			msg := "未发现可配对的设备"
-			if lastErr != nil {
-				msg = errMsg(lastErr)
-			}
-			writeJSON(w, map[string]any{"ok": false, "message": msg})
+		if len(targets) == 0 {
+			writeJSON(w, map[string]any{"ok": false, "message": "未发现可配对的设备：确认对方已进入配对等待"})
+			return
+		}
+		if len(targets) > 1 {
+			writeJSON(w, map[string]any{"ok": false, "message": "发现多台候选设备，为防配对码误投已中止：请只让一台设备处于配对等待后再试"})
+			return
+		}
+		name, err := transfer.Pair(ctx, s.id, s.trust, targetOfInfo(targets[0]), in.Code)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "message": errMsg(err)})
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "name": name})

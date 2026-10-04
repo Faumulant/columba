@@ -89,6 +89,45 @@ type Receiver struct {
 	pairing  *pairState
 	paired   chan struct{}
 	pairOnce sync.Once
+
+	pairFailsMu sync.Mutex
+	pairFails   map[string]*pairFail
+}
+
+// pairFail 配对失败限速记录（按来源 IP）。
+type pairFail struct {
+	fails    int
+	winStart time.Time
+}
+
+// pairAllowed 配对尝试限速判定：10 分钟窗口内失败超过 5 次拒绝继续尝试。
+const pairFailMax = 5
+
+func (r *Receiver) pairAllowed(ip string) bool {
+	r.pairFailsMu.Lock()
+	defer r.pairFailsMu.Unlock()
+	if r.pairFails == nil {
+		r.pairFails = map[string]*pairFail{}
+	}
+	f, ok := r.pairFails[ip]
+	if !ok || time.Since(f.winStart) > 10*time.Minute {
+		return true
+	}
+	return f.fails < pairFailMax
+}
+
+func (r *Receiver) pairFail(ip string) {
+	r.pairFailsMu.Lock()
+	defer r.pairFailsMu.Unlock()
+	if r.pairFails == nil {
+		r.pairFails = map[string]*pairFail{}
+	}
+	f, ok := r.pairFails[ip]
+	if !ok || time.Since(f.winStart) > 10*time.Minute {
+		r.pairFails[ip] = &pairFail{fails: 1, winStart: time.Now()}
+		return
+	}
+	f.fails++
 }
 
 func NewReceiver(id *identity.Identity, trust *identity.TrustStore, opt ReceiveOptions) *Receiver {
@@ -190,6 +229,12 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "设备未配对：请先在两端执行 drop pair 完成配对", http.StatusUnauthorized)
 		return
 	}
+	// 记录认证连接的来源 IP（宣告改名校验的信任锚点）
+	if c := certOf(req); c != nil {
+		if h, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+			r.trust.NoteAddr(peerID(req), h)
+		}
+	}
 	switch req.URL.Path {
 	case protocol.PathOffer:
 		r.handleOffer(w, req)
@@ -240,8 +285,16 @@ func (r *Receiver) handlePair(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, protocol.PairAck{Message: "请求无效"})
 		return
 	}
+	// 失败限速：同一来源 IP 在 10 分钟窗口内配对失败超 5 次，暂时拒绝
+	//（防 6 位码爆破与配对码焚烧）
+	ip := hostOnly(req.RemoteAddr)
+	if !r.pairAllowed(ip) {
+		writeJSON(w, protocol.PairAck{Message: "尝试过于频繁，请 10 分钟后再试"})
+		return
+	}
 	c := certOf(req)
 	if c == nil {
+		r.pairFail(ip)
 		writeJSON(w, protocol.PairAck{Message: "缺少设备证书"})
 		return
 	}
@@ -253,9 +306,13 @@ func (r *Receiver) handlePair(w http.ResponseWriter, req *http.Request) {
 		subtle.ConstantTimeCompare([]byte(st.code), []byte(strings.TrimSpace(pr.Code))) == 1
 	if valid {
 		st.used = true // 一次性：无论最终是否确认，配对码立即失效
+		r.pairMu.Lock()
+		delete(r.pairFails, hostOnly(req.RemoteAddr))
+		r.pairMu.Unlock()
 	}
 	r.pairMu.Unlock()
 	if !valid {
+		r.pairFail(ip)
 		if os.Getenv("DROP_DEBUG") != "" {
 			r.pairMu.Lock()
 			dbg := "nil"
@@ -513,6 +570,14 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 }
 
 // touch 会话活跃心跳：长传输期间由上传处理器周期调用，防 janitor 误杀。
+// hostOnly 从 ip:port 提取主机部分；无端口时原样返回。
+func hostOnly(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
+
 func (r *Receiver) touch(sid string) {
 	r.mu.Lock()
 	if s, ok := r.sessions[sid]; ok {

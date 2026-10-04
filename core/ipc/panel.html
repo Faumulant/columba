@@ -584,7 +584,7 @@ function pairOpen() {
       if (p.waiting) {
         document.getElementById("pairWait").style.display = "none";
         document.getElementById("pairAsk").style.display = "block";
-        document.getElementById("askName").textContent = "配对请求来自 " + p.name;
+        document.getElementById("askName").textContent = "配对请求来自 " + p.name + "（" + p.id.slice(0, 9) + "…）";
       }
     });
   }, 1200);

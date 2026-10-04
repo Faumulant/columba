@@ -383,7 +383,7 @@ func (st *state) ensureDiscovery(auto bool) error {
 		for e := range disc.Events() {
 			tr.Feed(e)
 			// 对端改名自动同步进信任库（备注名优先，不受影响）
-			if d.trust.RefreshName(e.Announce.ID, e.Announce.Name) {
+			if d.trust.RefreshName(e.Announce.ID, e.Announce.Name, e.IP) {
 				st.dispatchChanged()
 			}
 		}

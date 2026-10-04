@@ -21,6 +21,9 @@ type Peer struct {
 	Alias   string    `json:"alias,omitempty"`
 	CertPEM string    `json:"cert_pem"`
 	AddedAt time.Time `json:"added_at"`
+	// LastIP 该设备最近一次经过认证的 TLS 连接来源 IP（数据端点均要求
+	// 已配对）。用于校验未认证宣告的改名请求是否可信。
+	LastIP string `json:"last_ip,omitempty"`
 }
 
 // DisplayName 备注名优先。
@@ -134,8 +137,10 @@ func (t *TrustStore) SetAlias(idOrName, alias string) bool {
 }
 
 // RefreshName 宣告得知对端自报名变化时刷新缓存名，让改名自动跨设备同步
-//（无需重新配对）。备注名优先显示、永不被覆盖。返回是否发生了变更。
-func (t *TrustStore) RefreshName(id, name string) bool {
+//（无需重新配对）。备注名优先显示、永不被覆盖。
+// 安全约束：组播宣告未认证、ID 可伪造，因此仅接受来源 IP 与该设备
+// 最近一次认证连接一致的宣告（LastIP），否则静默忽略。返回是否变更。
+func (t *TrustStore) RefreshName(id, name, ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.reloadLocked()
@@ -144,10 +149,29 @@ func (t *TrustStore) RefreshName(id, name string) bool {
 	if !ok || p.Alias != "" || name == "" || p.Name == name {
 		return false
 	}
+	if ip == "" || p.LastIP == "" || p.LastIP != ip {
+		return false
+	}
 	p.Name = name
 	t.peers[pid] = p
 	t.saveLocked()
 	return true
+}
+
+// NoteAddr 记录某设备最近一次经过认证的 TLS 连接来源 IP（数据端点均要求
+// 已配对，认证在 TLS 握手完成）。供 RefreshName 的来源校验使用。
+func (t *TrustStore) NoteAddr(id, ip string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reloadLocked()
+	pid := protocol.NormalizeID(id)
+	p, ok := t.peers[pid]
+	if !ok || p.LastIP == ip || ip == "" {
+		return
+	}
+	p.LastIP = ip
+	t.peers[pid] = p
+	t.saveLocked()
 }
 
 // Remove 移除一台已信任设备（面板设备管理用）。
