@@ -475,6 +475,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	final := ResolveConflict(r.dir(), filepath.FromSlash(st.meta.Path))
 	if err := os.Rename(st.part, filepath.Join(r.dir(), final)); err != nil {
 		os.Remove(st.part)
+		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "保存文件失败: "+err.Error())
 		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
