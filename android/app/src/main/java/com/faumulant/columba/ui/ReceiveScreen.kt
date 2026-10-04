@@ -40,7 +40,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Launch
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -161,18 +160,25 @@ fun ReceiveScreen(
     }
 
     toDelete?.let { e ->
-        AlertDialog(
-            onDismissRequest = { toDelete = null },
-            title = { Text("删除记录") },
-            text = { Text("删除这条记录？（不影响已保存的文件）") },
-            confirmButton = {
-                TextButton(onClick = {
+        AppDialog(
+            onDismiss = { toDelete = null },
+            title = "删除记录",
+            content = {
+                Text(
+                    "删除这条记录？（不影响已保存的文件）",
+                    fontSize = 13.sp, lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            buttons = {
+                DlgButton("取消", "ghost") { toDelete = null }
+                Spacer(Modifier.width(10.dp))
+                DlgButton("删除", "danger") {
                     toDelete = null
                     val ids = listOf(e.id)
                     Thread { val r = Go.deleteHistory(ids); Bus.refreshHistory() }.start()
-                }) { Text("删除") }
+                }
             },
-            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("取消") } },
         )
     }
 }
@@ -350,90 +356,79 @@ fun Thumb(path: String, sizeDp: Int) {
 private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () -> Unit) {
     val ctx = LocalContext.current
     val s = AppSettings.load(ctx)
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(if (entry.isText) "文本" else entry.name, fontSize = 17.sp) },
-        text = {
-            Column {
-                Text("来自 ${entry.peer} · ${fmtTimeFull(entry.time)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                if (entry.isText) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
-                    ) {
-                        Text(
-                            entry.text,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp,
-                            modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        )
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = {
-                        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("text", entry.text))
-                        Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
-                        Text("复制全文", modifier = Modifier.padding(start = 4.dp))
-                    }
-                } else {
-                    if (entry.path.isNotEmpty()) Text("已存到 ${entry.path}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (entry.error.isNotEmpty()) Text("错误：${entry.error}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                    if (entry.status == "ok" && entry.path.isNotEmpty()) {
-                        Spacer(Modifier.height(4.dp))
-                        TextButton(onClick = {
-                            // 老版本历史条目的 path 存的是接收目录（已修），补上文件名即可打开
-                            var f = java.io.File(entry.path)
-                            if (f.isDirectory) f = java.io.File(f, entry.name)
-                            val ext = f.extension.lowercase()
-                            val mime = mimeForName(f.name)
-                            android.util.Log.d("ColumbaOpen", "tap path=${entry.path} ext=$ext mime=$mime")
-                            if (mime == "application/octet-stream") {
-                                // 无已知类型：不启动（荣耀系统会兜底跳文件管理器选择页，
-                                // 用户感知为「什么都没发生」），直接给出明确提示
-                                android.util.Log.d("ColumbaOpen", "octet-stream 拒发")
-                                Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
-                                return@TextButton
-                            }
-                            val uri = androidx.core.content.FileProvider.getUriForFile(
-                                ctx, "com.faumulant.columba.fileprovider", f
-                            )
-                            val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
-                                .setDataAndType(uri, mime)
-                                .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            android.util.Log.d("ColumbaOpen", "uri=$uri")
-                            try {
-                                ctx.startActivity(i)
-                                android.util.Log.d("ColumbaOpen", "startActivity 成功")
-                            } catch (e: android.content.ActivityNotFoundException) {
-                                android.util.Log.d("ColumbaOpen", "ANFE", e)
-                                Toast.makeText(ctx, "手机上没有能打开 .$ext 这类文件的应用", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                android.util.Log.d("ColumbaOpen", "fail", e)
-                                Toast.makeText(ctx, "打开失败：${e.message ?: ""}", Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(Icons.Filled.Launch, null, modifier = Modifier.size(16.dp))
-                            Text("打开", modifier = Modifier.padding(start = 4.dp))
+    AppDialog(
+        onDismiss = onClose,
+        title = if (entry.isText) "文本" else entry.name,
+        content = {
+            Text(
+                "来自 ${entry.peer} · ${fmtTimeFull(entry.time)}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            if (entry.isText) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
+                ) {
+                    Text(
+                        entry.text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                    )
+                }
+            } else {
+                if (entry.path.isNotEmpty()) Text(
+                    "已存到 ${entry.path}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (entry.error.isNotEmpty()) Text(
+                    "错误：${entry.error}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        buttons = {
+            if (entry.isText) {
+                DlgButton("复制全文", "ghost") {
+                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("text", entry.text))
+                    Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (!entry.isText && entry.status == "ok" && entry.path.isNotEmpty()) {
+                DlgButton("打开", "ghost") {
+                    var f = java.io.File(entry.path)
+                    if (f.isDirectory) f = java.io.File(f, entry.name)
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        ctx, "com.faumulant.columba.fileprovider", f
+                    )
+                    val mime = mimeForName(f.name)
+                    if (mime == "application/octet-stream") {
+                        Toast.makeText(ctx, "手机上没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                            .setDataAndType(uri, mime)
+                            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        try {
+                            ctx.startActivity(i)
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            Toast.makeText(ctx, "手机上没有能打开这类文件的应用", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "打开失败：${e.message ?: ""}", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
+            Spacer(Modifier.width(10.dp))
             if (!entry.isText && entry.isRecv && entry.status == "ok" && !s.isAuto) {
-                TextButton(onClick = onSave) { Text("保存到…") }
+                DlgButton("保存到…", "pri") { onClose(); onSave() }
             } else {
-                TextButton(onClick = onClose) { Text("关闭") }
+                DlgButton("关闭", "ghost") { onClose() }
             }
         },
-        dismissButton = if (!entry.isText && entry.isRecv && entry.status == "ok" && !s.isAuto) {
-            { TextButton(onClick = onClose) { Text("关闭") } }
-        } else null,
     )
 }
 

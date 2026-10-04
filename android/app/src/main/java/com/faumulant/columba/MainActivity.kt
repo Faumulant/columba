@@ -20,6 +20,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -33,20 +34,18 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Drafts
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,7 +60,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.faumulant.columba.ui.AppDialog
 import com.faumulant.columba.ui.ColumbaTheme
+import com.faumulant.columba.ui.DlgButton
 import com.faumulant.columba.ui.HairlineColor
 import com.faumulant.columba.ui.ReceiveScreen
 import com.faumulant.columba.ui.SendSheet
@@ -133,10 +134,10 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(AppSettings.load(applicationContext).lastTargetId.ifBlank { null })
         }
         var showSend by remember { mutableStateOf(false) }
-        val snackbar = remember { SnackbarHostState() }
+        // 居中反转胶囊 toast（与 PC 面板同语言），2.6 秒自动消失
         LaunchedEffect(Bus.snackbar) {
-            Bus.snackbar?.let {
-                snackbar.showSnackbar(it)
+            if (Bus.snackbar != null) {
+                kotlinx.coroutines.delay(2600)
                 Bus.clearSnackbar()
             }
         }
@@ -190,7 +191,6 @@ class MainActivity : ComponentActivity() {
         }
 
         Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
             bottomBar = {
                 BottomBar(
                     tab = tab,
@@ -199,6 +199,7 @@ class MainActivity : ComponentActivity() {
                 )
             },
         ) { padding ->
+            Box(Modifier.fillMaxSize()) {
             Surface(Modifier.fillMaxSize().padding(padding), color = MaterialTheme.colorScheme.surface) {
                 // 页面切换：交叉淡化 200ms，克制不抢戏
                 AnimatedContent(
@@ -214,6 +215,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            // 居中反转胶囊 toast（与 PC 面板同语言）
+            Bus.snackbar?.let { msg ->
+                Box(
+                    Modifier.fillMaxSize().padding(bottom = 120.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.inverseSurface,
+                        shadowElevation = 6.dp,
+                    ) {
+                        Text(
+                            msg,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                        )
+                    }
+                }
+            }
+            }
         }
 
         if (showSend) {
@@ -227,15 +249,20 @@ class MainActivity : ComponentActivity() {
 
         // 配对请求弹窗（OnPairRequest → 允许/拒绝 → PairDecide）
         Bus.pairRequest?.let { req ->
-            AlertDialog(
-                onDismissRequest = { Bus.resolvePairRequest(false) },
-                title = { Text("配对请求") },
-                text = { Text("设备「${req.name}」请求与本机配对，允许吗？") },
-                confirmButton = {
-                    TextButton(onClick = { Bus.resolvePairRequest(true) }) { Text("允许") }
+            AppDialog(
+                onDismiss = { Bus.resolvePairRequest(false) },
+                title = "配对请求",
+                content = {
+                    Text(
+                        "设备「${req.name}」请求与本机配对，允许吗？",
+                        fontSize = 13.sp, lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 },
-                dismissButton = {
-                    TextButton(onClick = { Bus.resolvePairRequest(false) }) { Text("拒绝") }
+                buttons = {
+                    DlgButton("拒绝", "ghost") { Bus.resolvePairRequest(false) }
+                    Spacer(Modifier.width(10.dp))
+                    DlgButton("允许", "pri") { Bus.resolvePairRequest(true) }
                 },
             )
         }

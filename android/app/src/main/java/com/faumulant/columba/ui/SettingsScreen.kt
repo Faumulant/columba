@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.NorthEast
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -352,20 +351,27 @@ fun SettingsScreen() {
     }
 
     removeDev?.let { d ->
-        AlertDialog(
-            onDismissRequest = { removeDev = null },
-            title = { Text("移除设备") },
-            text = { Text("移除「${d.name}」？之后需要重新配对。") },
-            confirmButton = {
-                TextButton(onClick = {
+        AppDialog(
+            onDismiss = { removeDev = null },
+            title = "移除设备",
+            content = {
+                Text(
+                    "移除「${d.name}」？之后需要重新配对。",
+                    fontSize = 13.sp, lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            buttons = {
+                DlgButton("取消", "ghost") { removeDev = null }
+                Spacer(Modifier.width(10.dp))
+                DlgButton("移除设备", "danger") {
                     removeDev = null
                     Thread {
                         Go.removeDevice(d.id)
                         Bus.refreshDevices()
                     }.start()
-                }) { Text("移除") }
+                }
             },
-            dismissButton = { TextButton(onClick = { removeDev = null }) { Text("取消") } },
         )
     }
 
@@ -388,26 +394,26 @@ fun SettingsScreen() {
 @Composable
 private fun AliasDialog(deviceName: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("修改备注名") },
-        text = {
-            Column {
-                Text("给「$deviceName」的备注仅自己可见；留空清除。", fontSize = 13.sp)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(deviceName) },
-                    singleLine = true,
-                )
-            }
+    AppDialog(
+        onDismiss = onDismiss,
+        title = "修改备注名",
+        content = {
+            Text("给「$deviceName」的备注仅自己可见；留空清除。", fontSize = 13.sp)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text(deviceName) },
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+            )
         },
-        confirmButton = {
-            TextButton(onClick = { onSave(text.trim()) }) { Text("保存") }
+        buttons = {
+            DlgButton("取消", "ghost") { onDismiss() }
+            Spacer(Modifier.width(10.dp))
+            DlgButton("保存", "pri") { onSave(text.trim()) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 
@@ -416,28 +422,30 @@ private fun AliasDialog(deviceName: String, onDismiss: () -> Unit, onSave: (Stri
 private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf(initial) }
     var err by remember { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("修改本机名") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; err = null },
-                    singleLine = true,
-                    placeholder = { Text("给其他设备看的名字") },
-                )
-                if (err != null) {
-                    Text(err!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                }
+    AppDialog(
+        onDismiss = onDismiss,
+        title = "修改本机名",
+        content = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it; err = null },
+                singleLine = true,
+                placeholder = { Text("给其他设备看的名字") },
+                shape = RoundedCornerShape(10.dp),
+            )
+            if (err != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(err!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
+        buttons = {
+            DlgButton("取消", "ghost") { onDismiss() }
+            Spacer(Modifier.width(10.dp))
+            DlgButton("保存", "pri") {
                 val n = name.trim()
                 if (n.isEmpty()) {
                     err = "名字不能为空"
-                    return@TextButton
+                    return@DlgButton
                 }
                 Thread {
                     val r = Go.setDeviceName(n)
@@ -449,9 +457,8 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
                         err = r.exceptionOrNull()?.message ?: "改名失败"
                     }
                 }.start()
-            }) { Text("保存") }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 
@@ -526,10 +533,10 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
     var joining by remember { mutableStateOf(false) }
     var joinMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
-        onDismissRequest = { if (!joining) onDismiss() },
-        title = { Text("添加设备") },
-        text = {
+    AppDialog(
+        onDismiss = { if (!joining) onDismiss() },
+        title = "添加设备",
+        content = {
             Column {
                 Text("方式一：本机出码（在电脑端输入）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
@@ -577,28 +584,26 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                 }
             }
         },
-        confirmButton = {
-            Button(
-                enabled = !joining && input.isNotBlank(),
-                onClick = {
-                    joining = true
-                    joinMsg = null
-                    val code = input.trim()
-                    Thread {
-                        // 先确保发现监听在跑（在线状态与目标解析更快命中）
-                        Receiver.ensureStarted(ctx)
-                        val r = Go.pairJoin(code)
-                        joining = false
-                        if (r.isSuccess) {
-                            joinMsg = null
-                            onPaired()
-                        } else {
-                            joinMsg = r.exceptionOrNull()?.message
-                        }
-                    }.start()
-                },
-            ) { Text("加入") }
+        buttons = {
+            DlgButton("取消", "ghost", enabled = !joining) { onDismiss() }
+            Spacer(Modifier.width(10.dp))
+            DlgButton("加入", "pri", enabled = !joining && input.isNotBlank()) {
+                joining = true
+                joinMsg = null
+                val code = input.trim()
+                Thread {
+                    // 先确保发现监听在跑（在线状态与目标解析更快命中）
+                    Receiver.ensureStarted(ctx)
+                    val r = Go.pairJoin(code)
+                    joining = false
+                    if (r.isSuccess) {
+                        joinMsg = null
+                        onPaired()
+                    } else {
+                        joinMsg = r.exceptionOrNull()?.message
+                    }
+                }.start()
+            }
         },
-        dismissButton = { TextButton(onClick = { if (!joining) onDismiss() }) { Text("取消") } },
     )
 }

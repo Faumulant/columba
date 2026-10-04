@@ -214,7 +214,7 @@ input.codein:focus{border-color:var(--sub)}
 <div class="drop" id="dropOv"><span>松开发送到「<b id="dropTarget">…</b>」</span></div>
 <div class="toasts" id="toasts"></div>
 
-<div class="mask" id="pairMask">
+<div class="mask" id="pairMask" onclick="if(event.target===this)pairClose()">
   <div class="modal">
     <b>添加设备</b>
     <div class="tabs">
@@ -243,7 +243,7 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
-<div class="mask" id="noteMask">
+<div class="mask" id="noteMask" onclick="if(event.target===this)ui('noteMask',0)">
   <div class="note">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
       <b id="noteMeta" style="font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></b>
@@ -254,7 +254,7 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
-<div class="mask" id="helpMask">
+<div class="mask" id="helpMask" onclick="if(event.target===this)ui('helpMask',0)">
   <div class="modal" style="width:440px;text-align:left">
     <b id="helpTitle">安装说明</b>
     <div id="helpBody" style="font-size:12.5px;color:var(--sub);line-height:1.8;margin-top:12px"></div>
@@ -262,8 +262,8 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
-<div class="mask" id="unlockMask">
-  <div class="modal" style="width:320px;text-align:center">
+<div class="mask" id="unlockMask" onclick="if(event.target===this)ui('unlockMask',0)">
+  <div class="modal" style="width:320px">
     <b>支持作者</b>
     <div style="font-size:13px;color:var(--sub);margin:14px 0 4px">非强制付款，直接点击即可</div>
     <div style="border:1.5px dashed var(--line-2);border-radius:12px;padding:18px;margin:12px 0;color:var(--sub);font-size:12.5px">
@@ -274,7 +274,7 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
-<div class="mask" id="aliasMask">
+<div class="mask" id="aliasMask" onclick="if(event.target===this)ui('aliasMask',0)">
   <div class="modal" style="width:320px">
     <b>修改备注名</b>
     <div style="font-size:12.5px;color:var(--sub);margin:10px 0 0">给「<b id="aliasDev">…</b>」起个本机备注；留空则恢复显示对方自报名。备注只在本机生效。</div>
@@ -285,6 +285,14 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
+<div class="mask" id="removeMask">
+  <div class="modal" style="width:320px">
+    <b>移除设备</b>
+    <div style="font-size:12.5px;color:var(--sub);margin:10px 0 0">移除「<b id="removeName">…</b>」？双方都需要重新配对才能再次传输。</div>
+    <button class="btn" style="width:100%;padding:9px;margin-top:14px" onclick="ui('removeMask',0)">取消</button>
+    <button class="btn errb" style="width:100%;padding:10px;margin-top:8px" onclick="removeConfirm()">移除设备</button>
+  </div>
+</div>
 <script>
 /* ===== 基础 ===== */
 const T = new URLSearchParams(location.search).get("t") || "";
@@ -527,9 +535,16 @@ function sendText() {
    .then(r => { if (r.ok) { ta.value = ""; toast("已发送到「" + targetName() + "」") } else toast(r.message || "发送失败", {err:true,sticky:true}) })
    .catch(() => toast("发送失败", {err:true,sticky:true}));
 }
+let removeId = "", removeName = "";
 function rmDev(id, name) {
-  if (!confirm("移除设备「" + name + "」？双方都需要重新配对才能再次传输。")) return;
-  j("device/remove", {method:"POST", body:JSON.stringify({id})}).then(() => { toast("已移除 " + name); refresh() });
+  removeId = id; removeName = name;
+  document.getElementById("removeName").textContent = name;
+  ui("removeMask", 1);
+}
+function removeConfirm() {
+  j("device/remove", {method:"POST", body:JSON.stringify({id:removeId})}).then(() => {
+    ui("removeMask", 0); toast("已移除 " + removeName); refresh()
+  }).catch(() => toast("移除失败", {err:true,sticky:true}));
 }
 function pickDir() {
   api("pick-dir", {method:"POST"}).then(r => r.json()).then(r => {

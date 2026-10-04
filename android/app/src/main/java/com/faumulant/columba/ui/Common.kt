@@ -1,10 +1,21 @@
 package com.faumulant.columba.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,16 +26,25 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.faumulant.columba.HistoryEntry
 import java.text.DateFormat
 import java.util.Date
@@ -149,4 +169,79 @@ fun EllipsisText(text: String, modifier: Modifier = Modifier, maxLines: Int = 1,
         maxLines = maxLines, overflow = TextOverflow.Ellipsis,
         fontSize = fontSize.sp, color = MaterialTheme.colorScheme.onSurface
     )
+}
+
+// ─── 统一弹窗（与桌面面板同一设计语言）────────────────────────────
+// 容器：16dp 圆角 / card 底 / hairline 描边；标题左对齐 16sp semibold；
+// 按钮三态：pri = 反转实心，ghost = hairline 描边，danger = 陶土色文字。
+
+@Composable
+fun AppDialog(
+    onDismiss: () -> Unit,
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+    buttons: @Composable RowScope.() -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = modifier
+                .padding(horizontal = 22.dp)
+                .fillMaxWidth()
+                .widthIn(max = 380.dp)
+                .imePadding(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = BorderStroke(1.dp, HairlineColor),
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
+                Text(
+                    title,
+                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(10.dp))
+                content()
+                Spacer(Modifier.height(20.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { buttons() }
+            }
+        }
+    }
+}
+
+// 弹窗按钮三态：pri 反转实心 / ghost hairline 描边 / danger 陶土文字
+@Composable
+fun DlgButton(label: String, kind: String = "ghost", enabled: Boolean = true, onClick: () -> Unit) {
+    when (kind) {
+        "pri" -> Button(
+            onClick = onClick, enabled = enabled,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+        ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+
+        "danger" -> TextButton(
+            onClick = onClick, enabled = enabled,
+            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+
+        else -> OutlinedButton(
+            onClick = onClick, enabled = enabled,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, HairlineColor),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+        ) { Text(label, fontSize = 13.sp) }
+    }
 }
