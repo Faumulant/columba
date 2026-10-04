@@ -10,3 +10,4 @@ tmp/
 dist/
 tmp_*.txt
 /tools/jdk-21/
+tmp_*.log
