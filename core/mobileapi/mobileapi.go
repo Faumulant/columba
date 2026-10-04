@@ -435,7 +435,7 @@ func sameKeys(a, b map[string]bool) bool {
 // ─── 设备与配对 ──────────────────────────────────────────────────
 
 // ListDevices 已配对设备列表（JSON）：[{"id","name","online"}]，
-// name 为显示名（备注优先），online 为最近 6 秒内有无宣告。
+// name 为显示名（备注优先），online 为最近 20 秒内有无宣告。
 func ListDevices() string {
 	d, err := st.device()
 	if err != nil {
