@@ -219,6 +219,7 @@ func OpenPanelWindow(url string) error {
 		defer w.Destroy()
 		w.Navigate(url)
 		setWindowIcon(w.Window(), dropIco)
+		setNativeTitleBar(w.Window(), appsUseDarkTheme())
 		go trackPanelSize(w.Window(), scale) // 记录尺寸，下次按上次大小打开
 		w.Run()
 	}()
@@ -228,7 +229,36 @@ func OpenPanelWindow(url string) error {
 var (
 	procGetDpiForSystem = user32.NewProc("GetDpiForSystem")
 	procGetWindowRect   = user32.NewProc("GetWindowRect")
+	dwmapi              = windows.NewLazySystemDLL("dwmapi.dll")
+	procDwmSetWinAttr   = dwmapi.NewProc("DwmSetWindowAttribute")
 )
+
+// appsUseDarkTheme 读系统「应用模式」深色设置（与面板内容的跟随信号一致）。
+func appsUseDarkTheme() bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return true
+	}
+	defer k.Close()
+	v, _, _ := k.GetIntegerValue("AppsUseLightTheme")
+	return v == 0
+}
+
+// setNativeTitleBar DWM 标题栏融合：把标题栏底色/文字/边框精确设为面板
+// 同色，标题栏与内容零色差，观感如同面板自绘——拖拽/贴边/三键仍是原生。
+// 深浅两模式分别取面板对应底色；Win11 完整生效，Win10 自动降级为仅深色声明。
+func setNativeTitleBar(hwnd unsafe.Pointer, dark bool) {
+	bg, txt := uint32(0x00F8FAFA), uint32(0x00161716) // 浅色：暖白底 / 深字
+	if dark {
+		bg, txt = uint32(0x000C0B0B), uint32(0x00F0F2F2) // 深色：黑底 / 浅字
+	}
+	on := int32(1)
+	procDwmSetWinAttr.Call(uintptr(hwnd), 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, uintptr(unsafe.Pointer(&on)), 4)
+	procDwmSetWinAttr.Call(uintptr(hwnd), 35 /*DWMWA_CAPTION_COLOR*/, uintptr(unsafe.Pointer(&bg)), 4)
+	procDwmSetWinAttr.Call(uintptr(hwnd), 36 /*DWMWA_TEXT_COLOR*/, uintptr(unsafe.Pointer(&txt)), 4)
+	procDwmSetWinAttr.Call(uintptr(hwnd), 34 /*DWMWA_BORDER_COLOR*/, uintptr(unsafe.Pointer(&bg)), 4)
+}
 
 type winRect struct{ L, T, R, B int32 }
 
