@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>弹窗风格统一预览 · Columba</title>
+<style>
+/* ===== 主题变量（与两端定稿一致） ===== */
+:root{
+  --bg:#0B0B0C;--card:#151517;--card-2:#17171A;
+  --txt:#F2F2F0;--sub:#8F8F8B;--faint:#777773;
+  --line:#2A2A2D;--hairline:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.16);
+  --accent:#F5F5F2;--on-accent:#0B0B0C;
+  --ok:#8FAE8B;--err:#C08A7E;
+  --fill-1:rgba(255,255,255,.05);--fill-2:rgba(255,255,255,.09);
+  --mask:rgba(0,0,0,.55);--shadow:0 16px 44px rgba(0,0,0,.55);
+}
+body.light{
+  --bg:#FAFAF8;--card:#FFFFFF;--card-2:#FFFFFF;
+  --txt:#171716;--sub:#6E6E6A;--faint:#9A9A95;
+  --line:#E4E4E0;--hairline:rgba(0,0,0,.08);--line-2:rgba(0,0,0,.16);
+  --accent:#171716;--on-accent:#FAFAF8;
+  --ok:#5F7A5B;--err:#A85A4C;
+  --fill-1:rgba(23,23,22,.05);--fill-2:rgba(23,23,22,.09);
+  --mask:rgba(0,0,0,.35);--shadow:0 12px 36px rgba(0,0,0,.16);
+}
+*{margin:0;padding:0;box-sizing:border-box;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+body{background:var(--bg);color:var(--txt);min-height:100vh;padding:36px 24px 64px;transition:background .25s,color .25s}
+.caveat{font-family:"Caveat","Segoe UI",cursive}
+
+/* ===== 主题切换 ===== */
+.theme-toggle{position:fixed;top:18px;right:20px;z-index:9;font-size:12px;padding:7px 14px;border-radius:99px;
+  border:1px solid var(--line-2);background:var(--card);color:var(--txt);cursor:pointer}
+.theme-toggle:hover{border-color:var(--sub)}
+
+/* ===== 版式 ===== */
+.page{max-width:880px;margin:0 auto;display:flex;flex-direction:column;gap:34px}
+.cap{font-size:11px;color:var(--faint);letter-spacing:.06em;margin-bottom:-24px;text-transform:uppercase}
+.duo{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+
+/* ===== 统一弹窗规范 v2 ===== */
+.dlg{width:380px;background:var(--card);border:1px solid var(--hairline);border-radius:16px;
+  padding:20px 22px;box-shadow:var(--shadow);text-align:left}
+.dlg h3{font-size:16px;font-weight:600;margin:0 0 8px}
+.dlg .desc{font-size:12.5px;color:var(--sub);line-height:1.65;margin:0 0 4px}
+.dlg .mono{font-family:Consolas,monospace;font-size:12px;color:var(--txt);background:var(--fill-1);
+  border-radius:8px;padding:5px 9px;display:inline-block;margin-top:8px}
+.dlg .frow{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+
+.btn{font-size:12.5px;padding:8px 16px;border-radius:10px;cursor:pointer;transition:all .16s;
+  border:1px solid var(--line-2);background:transparent;color:var(--txt)}
+.btn:hover{border-color:var(--sub)}
+.btn.pri{background:var(--accent);border-color:transparent;color:var(--on-accent);font-weight:600}
+.btn.pri:hover{opacity:.86}
+.btn.danger{border-color:transparent;color:var(--err);font-weight:600}
+.btn.danger:hover{background:var(--fill-1)}
+
+.field{margin-top:14px}
+.field label{display:block;font-size:11px;color:var(--faint);margin-bottom:6px}
+.field input{width:100%;font-size:13px;padding:9px 12px;border-radius:10px;outline:none;
+  border:1px solid var(--line-2);background:var(--card-2);color:var(--txt)}
+.field input:focus{border-color:var(--sub)}
+
+/* ===== 场景：带遮罩的完整弹窗（演示点外关闭） ===== */
+.scene{position:relative;border-radius:18px;overflow:hidden;min-height:280px;
+  display:flex;align-items:center;justify-content:center;border:1px dashed var(--line)}
+.scene .fake-page{position:absolute;inset:0;background:var(--bg);opacity:.5}
+.scene .mask{position:absolute;inset:0;background:var(--mask)}
+.scene .dlg{position:relative;z-index:1}
+.hint{position:absolute;left:14px;bottom:10px;font-size:10.5px;color:var(--faint)}
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="document.body.classList.toggle('light')">
+  切换 日间 / 夜间
+</button>
+
+<div class="page">
+  <div class="cap">弹窗规范 v2 · 预览（黑白色系 / 左对齐 / 按钮三态）</div>
+
+  <!-- 场景 1：带遮罩的表单弹窗 -->
+  <div class="scene">
+    <div class="fake-page"></div><div class="mask"></div>
+    <div class="dlg">
+      <h3>修改备注名</h3>
+      <p class="desc">给「我的手机」起个本机备注，仅自己可见；留空清除。</p>
+      <div class="field"><label>备注名</label><input value="我的手机"></div>
+      <div class="frow">
+        <button class="btn">取消</button>
+        <button class="btn pri">保存</button>
+      </div>
+    </div>
+    <div class="hint">场景：表单弹窗 · 遮罩点击可关闭（正式版实现）</div>
+  </div>
+
+  <div class="duo">
+    <!-- 场景 2：危险确认 -->
+    <div>
+      <div class="cap" style="margin-bottom:-18px">危险确认 · 新增危险色语义</div>
+      <div class="dlg" style="margin-top:26px">
+        <h3>移除设备</h3>
+        <p class="desc">移除「我的手机」？双方都需要重新配对才能再次传输。</p>
+        <div class="frow">
+          <button class="btn">取消</button>
+          <button class="btn danger">移除设备</button>
+        </div>
+      </div>
+    </div>
+    <!-- 场景 3：带指纹的配对确认 -->
+    <div>
+      <div class="cap" style="margin-bottom:-18px">配对确认 · 显示指纹前缀</div>
+      <div class="dlg" style="margin-top:26px">
+        <h3>配对请求</h3>
+        <p class="desc">以下设备请求与本机配对，请核对指纹：</p>
+        <span class="mono"><设备指纹前缀>-D97…</span>
+        <div class="frow">
+          <button class="btn">拒绝</button>
+          <button class="btn pri">允许</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cap">同款弹窗 · 日间模式（点右上角切换查看）</div>
+  <div class="duo" id="light-echo"></div>
+</div>
+
+<script>
+// 主题切换时同步演示区
+function echo(){
+  const src = document.querySelectorAll('.duo')[0] ? document.querySelectorAll('.dlg') : [];
+  // 简化：主题由 body class 全局生效，此处无需复制
+}
+// 读 ?theme=light 预设浅色
+if (new URLSearchParams(location.search).get("theme") === "light")
+  document.body.classList.add("light");
+</script>
+</body>
+</html>
