@@ -415,7 +415,22 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, msg, code)
 	}
 	src := &progressReader{r: io.LimitReader(req.Body, st.meta.Size+1), total: st.meta.Size, dir: "recv", peer: r.peerName(req), name: filepath.Base(st.meta.Path)}
+	// 传输心跳：每分钟刷新会话活跃时间，防 janitor 误杀慢速大文件传输
+	stopHeartbeat := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-tick.C:
+				r.touch(req.URL.Query().Get("s"))
+			}
+		}
+	}()
 	n, err := io.Copy(io.MultiWriter(st.file, st.hash), src)
+	close(stopHeartbeat)
 	if err != nil {
 		discard(http.StatusBadGateway, "传输中断，已丢弃不完整文件")
 		return
@@ -495,6 +510,15 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		r.opt.OnReceived(r.peerName(req), filepath.Base(final), savedPath)
 	}
 	writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(final)})
+}
+
+// touch 会话活跃心跳：长传输期间由上传处理器周期调用，防 janitor 误杀。
+func (r *Receiver) touch(sid string) {
+	r.mu.Lock()
+	if s, ok := r.sessions[sid]; ok {
+		s.last = time.Now()
+	}
+	r.mu.Unlock()
 }
 
 func (r *Receiver) record(peer, name, path string, size int64, ok bool, errMsg string) {
