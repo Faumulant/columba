@@ -244,6 +244,9 @@ const panelWndClassName = "ColumbaPanelWnd"
 // panelWebview 供窗口过程在 WM_SIZE 时同步浏览器边界（缩放联动）。
 var panelWebview webview2.WebView
 
+// panelHwnd 当前面板窗口句柄；非 0 = 面板已打开（单实例：再次打开 = 唤醒）
+var panelHwnd uintptr
+
 type wndClassExW struct {
 	CbSize        uint32
 	Style         uint32
@@ -264,6 +267,13 @@ type wndClassExW struct {
 // 所有装饰在显示前完成，杜绝白闪与图标丢失的时序窗口。
 func panelWindowMain(url string) {
 	runtime.LockOSThread()
+	// 单实例：面板已打开 → 唤醒并聚焦，不创建第二个窗口
+	//（多窗口会与全局 webview 引用互相顶替，导致尺寸联动错乱）
+	if panelHwnd != 0 {
+		procShowWindow.Call(panelHwnd, 9 /*SW_RESTORE*/)
+		procSetForegroundWindow.Call(panelHwnd)
+		return
+	}
 	lw, lh := panelLogicalSize()
 	scale := systemDpiScale()
 	wpx, hpx := int(float64(lw)*scale), int(float64(lh)*scale)
@@ -315,6 +325,7 @@ func panelWindowMain(url string) {
 		return
 	}
 	panelWebview = w
+	panelHwnd = hwnd
 	// 自带窗口路径：库不会自动同步浏览器边界（停在 0x0 → 白屏），
 	// 显式设为客户区尺寸
 	w.SetSize(wpx, hpx, 0)
@@ -325,6 +336,7 @@ func panelWindowMain(url string) {
 
 	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
 	w.Run() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
+	panelHwnd = 0
 	panelWebview = nil
 }
 
@@ -351,6 +363,8 @@ func panelWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 	)
 	switch msg {
 	case wmDestroy:
+		panelHwnd = 0
+		panelWebview = nil
 		procPostQuitMessage.Call(0)
 		return 0
 	case wmSize:
@@ -382,6 +396,7 @@ var (
 	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
 	procDestroyWindow    = user32.NewProc("DestroyWindow")
 	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
+	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 	procLoadCursorW      = user32.NewProc("LoadCursorW")
 )
