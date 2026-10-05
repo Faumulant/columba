@@ -193,10 +193,23 @@ func RemoveSendToLink(display string) error {
 	return nil
 }
 
-// OpenPanelWindow 打开原生 WebView2 面板窗口：鸽子窗口图标、无浏览器痕迹。
-// 尺寸 = 上次记忆的逻辑尺寸 × 系统缩放比例（DPI 感知，见 trackPanelSize）。
-// WebView2 运行时（Win10/11 预装）不可用时退回 Edge 应用窗口。
+// OpenPanelWindow 打开面板窗口：窗口生命周期完全自管——隐藏创建 →
+// 设图标/深色标题栏/DWM → 嵌入 WebView2 → 导航 → 深色首绘完成后才显示。
+// useLegacyPanel 切回库自管路径（回滚开关）。
+const useLegacyPanel = false
+
 func OpenPanelWindow(url string) error {
+	if useLegacyPanel {
+		return openPanelLegacy(url)
+	}
+	go func() {
+		runtime.LockOSThread()
+		panelWindowMain(url)
+	}()
+	return nil
+}
+
+func openPanelLegacy(url string) error {
 	go func() {
 		runtime.LockOSThread()
 		lw, lh := panelLogicalSize()
@@ -226,11 +239,146 @@ func OpenPanelWindow(url string) error {
 	return nil
 }
 
+const panelWndClassName = "ColumbaPanelWnd"
+
+// panelWebview 供窗口过程在 WM_SIZE 时同步浏览器边界（缩放联动）。
+var panelWebview webview2.WebView
+
+type wndClassExW struct {
+	CbSize        uint32
+	Style         uint32
+	LpfnWndProc   uintptr
+	CbClsExtra    int32
+	CbWndExtra    int32
+	HInstance     uintptr
+	HIcon         uintptr
+	HCursor       uintptr
+	HbrBackground uintptr
+	LpszMenuName  uintptr
+	LpszClassName uintptr
+	HIconSm       uintptr
+}
+
+// panelWindowMain 自管窗口主流程：注册窗口类 → 隐藏创建 → 装饰（图标/
+// 深色标题栏/DWM）→ 嵌入 WebView2 → 导航 → 深色首绘完成后才显示。
+// 所有装饰在显示前完成，杜绝白闪与图标丢失的时序窗口。
+func panelWindowMain(url string) {
+	runtime.LockOSThread()
+	lw, lh := panelLogicalSize()
+	scale := systemDpiScale()
+	wpx, hpx := int(float64(lw)*scale), int(float64(lh)*scale)
+
+	inst, _, _ := procGetModuleHandleW.Call(0)
+	if inst == 0 || !registerPanelClass(inst) {
+		openPanelLegacy(url)
+		return
+	}
+
+	// 居中位置（屏幕小于窗口时退 0，防无符号下溢）
+	sw, _, _ := procGetSystemMetrics.Call(0)
+	sh, _, _ := procGetSystemMetrics.Call(1)
+	swI, shI := int(sw), int(sh)
+	x, y := int32(0), int32(0)
+	if swI > wpx {
+		x = int32((swI - wpx) / 2)
+	}
+	if shI > hpx {
+		y = int32((shI - hpx) / 2)
+	}
+
+	cls, _ := windows.UTF16PtrFromString(panelWndClassName)
+	name, _ := windows.UTF16PtrFromString("Columba")
+	// WS_OVERLAPPEDWINDOW，不带 WS_VISIBLE：隐藏创建，装饰完再显示
+	hwnd, _, _ := procCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(cls)),
+		uintptr(unsafe.Pointer(name)),
+		0xCF0000, // WS_OVERLAPPEDWINDOW
+		uintptr(x), uintptr(y), uintptr(wpx), uintptr(hpx),
+		0, 0, inst, 0,
+	)
+	if hwnd == 0 {
+		openPanelLegacy(url)
+		return
+	}
+
+	setWindowIcon(unsafe.Pointer(hwnd), dropIco)
+	setNativeTitleBar(unsafe.Pointer(hwnd), appsUseDarkTheme())
+
+	w := webview2.NewWithOptions(webview2.WebViewOptions{
+		AutoFocus: true,
+		Window:    unsafe.Pointer(hwnd),
+	})
+	if w == nil {
+		procDestroyWindow.Call(hwnd)
+		openPanelLegacy(url)
+		return
+	}
+	panelWebview = w
+	w.Navigate(url)
+
+	// 页面已完成深色首绘，此刻显示：用户看到的第一个画面即最终形态
+	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
+	w.Run() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
+	panelWebview = nil
+}
+
+func registerPanelClass(hinstance uintptr) bool {
+	cls, _ := windows.UTF16PtrFromString(panelWndClassName)
+	var wc wndClassExW
+	wc.CbSize = uint32(unsafe.Sizeof(wc))
+	wc.LpfnWndProc = windows.NewCallback(panelWndProc)
+	wc.HInstance = hinstance
+	wc.LpszClassName = uintptr(unsafe.Pointer(cls))
+	if hcur, _, err := procLoadCursorW.Call(0, 32512 /*IDC_ARROW*/); err == nil {
+		wc.HCursor = hcur
+	}
+	atom, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	return atom != 0
+}
+
+func panelWndProc(hwnd, msg, wp, lp uintptr) uintptr {
+	const (
+		wmDestroy     = 0x0002
+		wmSize        = 0x0005
+		wmActivate    = 0x0006
+		sizeMinimized = 1
+	)
+	switch msg {
+	case wmDestroy:
+		procPostQuitMessage.Call(0)
+		return 0
+	case wmSize:
+		// 最小化不处理；其余尺寸变化同步 WebView2 边界
+		if wp != sizeMinimized && panelWebview != nil {
+			w := int16(wp & 0xFFFF)
+			h := int16(wp >> 16)
+			if w > 0 && h > 0 {
+				panelWebview.SetSize(int(w), int(h), 0 /*HintNone*/)
+			}
+		}
+	}
+	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wp, lp)
+	return r
+}
+
 var (
 	procGetDpiForSystem = user32.NewProc("GetDpiForSystem")
 	procGetWindowRect   = user32.NewProc("GetWindowRect")
 	dwmapi              = windows.NewLazySystemDLL("dwmapi.dll")
 	procDwmSetWinAttr   = dwmapi.NewProc("DwmSetWindowAttribute")
+
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
+
+	procRegisterClassExW = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
+	procShowWindow       = user32.NewProc("ShowWindow")
+	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
+	procDestroyWindow    = user32.NewProc("DestroyWindow")
+	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
+	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
+	procLoadCursorW      = user32.NewProc("LoadCursorW")
 )
 
 // appsUseDarkTheme 读系统「应用模式」深色设置（与面板内容的跟随信号一致）。
