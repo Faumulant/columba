@@ -319,8 +319,10 @@ func panelWindowMain(url string) {
 	// 显式设为客户区尺寸
 	w.SetSize(wpx, hpx, 0)
 	w.Navigate(url)
+	// 隐藏状态下给渲染引擎 300ms 完成深色首绘：显示瞬间即是最终形态，
+	// 不再出现「先白后黑」的初始化闪断
+	time.Sleep(300 * time.Millisecond)
 
-	// 页面已完成深色首绘，此刻显示：用户看到的第一个画面即最终形态
 	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
 	w.Run() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
 	panelWebview = nil
