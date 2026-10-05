@@ -315,6 +315,9 @@ func panelWindowMain(url string) {
 		return
 	}
 	panelWebview = w
+	// 自带窗口路径：库不会自动同步浏览器边界（停在 0x0 → 白屏），
+	// 显式设为客户区尺寸
+	w.SetSize(wpx, hpx, 0)
 	w.Navigate(url)
 
 	// 页面已完成深色首绘，此刻显示：用户看到的第一个画面即最终形态
