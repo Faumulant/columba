@@ -240,7 +240,7 @@ func RemoveSendToLink(display string) error {
 // OpenPanelWindow 打开面板窗口：窗口生命周期完全自管——隐藏创建 →
 // 设图标/深色标题栏/DWM → 嵌入 WebView2 → 导航 → 深色首绘完成后才显示。
 // useLegacyPanel 切回库自管路径（回滚开关）。
-const useLegacyPanel = false
+const useLegacyPanel = true
 
 // panelMu 串行化面板打开请求：goroutine-per-call + 无锁全局曾让两个
 // 并发请求双双通过"已打开"检查，产出一黑（自管深色）一白（legacy 回退）
