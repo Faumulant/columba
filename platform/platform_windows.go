@@ -158,6 +158,48 @@ func sanitizeFileName(s string) string {
 // psQuote PowerShell 单引号字符串转义：每个单引号替换为两个单引号。
 func psQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
 
+// EnsureDesktopShortcut 创建（或修补）桌面 Columba 快捷方式。
+// 图标落地为独立 .ico 再作 IconLocation：图标缓存绑定的是这个稳定文件，
+// 开发期反复覆盖 exe 不再导致桌面图标变空白（经典图标缓存失效）。
+// 已存在的快捷方式只更新图标，保留用户自己的目标配置。
+func EnsureDesktopShortcut() error {
+	exe := helperExe()
+	if exe == "" {
+		exe, _ = os.Executable()
+	}
+	if exe == "" {
+		return fmt.Errorf("无法确定程序路径")
+	}
+	icoPath := filepath.Join(identity.AppDir(), "columba.ico")
+	if err := os.WriteFile(icoPath, dropIco, 0o644); err != nil {
+		return err
+	}
+	script := `
+$desktop = [Environment]::GetFolderPath('Desktop')
+$lnk = Join-Path $desktop 'Columba.lnk'
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut($lnk)
+if (-not (Test-Path $lnk)) {
+  $s.TargetPath = '` + psQuote(exe) + `'
+  $s.Arguments = 'panel'
+  $s.WorkingDirectory = '` + psQuote(filepath.Dir(exe)) + `'
+  $s.WindowStyle = 1
+  $s.Description = 'Columba'
+}
+$s.IconLocation = '` + psQuote(icoPath) + `,0'
+$s.Save()`
+	return runHiddenPowerShell(script, 20*time.Second)
+}
+
+// RemoveDesktopShortcut 移除桌面快捷方式与落地的图标文件（卸载用，幂等）。
+func RemoveDesktopShortcut() {
+	os.Remove(filepath.Join(identity.AppDir(), "columba.ico"))
+	script := `
+$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Columba.lnk'
+if (Test-Path $lnk) { Remove-Item $lnk -Force }`
+	_ = runHiddenPowerShell(script, 20*time.Second)
+}
+
 // EnsureSendToLink 为一台已配对设备创建"发送到"快捷方式（已存在则跳过）。
 // 目标指向无控制台的伴生 exe，右键发送不闪黑窗。
 func EnsureSendToLink(display, deviceID string) error {
@@ -349,6 +391,9 @@ func panelWindowMain(url string) {
 	}
 	panelWebview = w
 	panelHwnd = hwnd
+	// 库窗口也要图标：当前版本库忽略 Window 参数、自建真实内容窗口，
+	// 其类图标按 exe 资源 ID 32512 加载（不存在 → 标题栏空白）
+	setWindowIcon(w.Window(), dropIco)
 	// 自带窗口路径：库不会自动同步浏览器边界（停在 0x0 → 白屏），
 	// 显式设为客户区尺寸
 	w.SetSize(wpx, hpx, 0)

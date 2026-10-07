@@ -55,6 +55,11 @@ func cmdInstall() error {
 		return fmt.Errorf("设置开机自启失败: %w", err)
 	}
 	fmt.Println("✓ 开机自启（登录后自动运行后台）")
+	if err := platform.EnsureDesktopShortcut(); err != nil {
+		fmt.Println("（桌面快捷方式创建失败：" + firstLine(err.Error()) + "）")
+	} else {
+		fmt.Println("✓ 桌面快捷方式（图标独立落地，exe 重建不再丢图标）")
+	}
 	fmt.Println("\n完成。后台将以托盘图标运行：drop run（或注销重登录验证自启）。")
 	fmt.Println("卸载：drop uninstall")
 	return nil
@@ -78,6 +83,7 @@ func cmdUninstall() error {
 	if err := platform.UnregisterFirefoxExtension(); err != nil {
 		warns = append(warns, "Firefox 扩展登记移除失败")
 	}
+	platform.RemoveDesktopShortcut()
 	// 清理每台已配对设备的"发送到"快捷方式
 	if trust, err := identity.LoadTrust(); err == nil {
 		for _, p := range trust.List() {

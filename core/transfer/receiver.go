@@ -558,6 +558,13 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	final := ResolveConflict(r.dir(), filepath.FromSlash(st.meta.Path))
+	// meta.Path 可含子目录（文件夹传输）：落盘前确保目标父目录存在
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(r.dir(), final)), 0o755); err != nil {
+		os.Remove(st.part)
+		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "创建目标目录失败: "+err.Error())
+		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := os.Rename(st.part, filepath.Join(r.dir(), final)); err != nil {
 		os.Remove(st.part)
 		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "保存文件失败: "+err.Error())
@@ -582,7 +589,6 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(final)})
 }
 
-// touch 会话活跃心跳：长传输期间由上传处理器周期调用，防 janitor 误杀。
 // hostOnly 从 ip:port 提取主机部分；无端口时原样返回。
 func hostOnly(addr string) string {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
@@ -591,10 +597,16 @@ func hostOnly(addr string) string {
 	return addr
 }
 
+// touch 会话活跃心跳：长传输期间由上传处理器周期调用，防 janitor 误杀。
 func (r *Receiver) touch(sid string) {
+	r.touchAt(sid, time.Now())
+}
+
+// touchAt touch 的时钟注入版本（测试 sweep 与心跳的交互用），行为一致。
+func (r *Receiver) touchAt(sid string, now time.Time) {
 	r.mu.Lock()
 	if s, ok := r.sessions[sid]; ok {
-		s.last = time.Now()
+		s.last = now
 	}
 	r.mu.Unlock()
 }
@@ -617,20 +629,31 @@ func (r *Receiver) janitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			r.mu.Lock()
-			for sid, s := range r.sessions {
-				if time.Since(s.last) > sessionTTL {
-					for _, st := range s.files {
-						if st.file != nil {
-							st.file.Close()
-						}
-					}
-					delete(r.sessions, sid)
-					go os.RemoveAll(partDir(r.dir(), sid)) // 目录删除放锁外
+			r.sweepSessions(time.Now())
+		}
+	}
+}
+
+// sweepSessions 清理超过 TTL 未活跃的会话：关闭仍挂起的文件句柄、移除会话
+// 并异步删除其 .part 暂存目录。now 由调用方注入（janitor 传真实时钟，测试
+// 可传任意时刻直接验证，免等 5 分钟 ticker），逻辑与原 janitor 内联清扫一致。
+func (r *Receiver) sweepSessions(now time.Time) {
+	r.mu.Lock()
+	var staleDirs []string
+	for sid, s := range r.sessions {
+		if now.Sub(s.last) > sessionTTL {
+			for _, st := range s.files {
+				if st.file != nil {
+					st.file.Close()
 				}
 			}
-			r.mu.Unlock()
+			delete(r.sessions, sid)
+			staleDirs = append(staleDirs, partDir(r.dir(), sid)) // 目录删除放锁外
 		}
+	}
+	r.mu.Unlock()
+	for _, d := range staleDirs {
+		go os.RemoveAll(d)
 	}
 }
 
