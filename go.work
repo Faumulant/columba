@@ -1,0 +1,4 @@
+go 1.27
+
+use .
+replace github.com/jchv/go-webview2 => ./third_party/go-webview2

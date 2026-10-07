@@ -23,6 +23,7 @@ import (
 
 	"fyne.io/systray"
 	"github.com/jchv/go-webview2"
+	"github.com/jchv/go-webview2/pkg/edge"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
@@ -308,8 +309,14 @@ func openPanelLegacy(url string) error {
 
 const panelWndClassName = "ColumbaPanelWnd"
 
-// panelWebview 供窗口过程在 WM_SIZE 时同步浏览器边界（缩放联动）。
-var panelWebview webview2.WebView
+// panelBrowser 嵌入自管窗口的 WebView2 浏览器；窗口过程在
+// WM_SIZE/WM_ACTIVATE/WM_MOVE 时联动（缩放/焦点/弹层跟随）。
+var panelBrowser *edge.Chromium
+
+// panelPinner 固定浏览器对象及其 COM 回调结构：Go 1.27 起 GC 会移动堆对象，
+// 而 WebView2 原生侧持有这些结构的裸指针（库源码注释自述违反 unsafe.Pointer
+// 规则4），对象一旦被移动，回调参数即错乱（env=nil 崩溃）。
+var panelPinner runtime.Pinner
 
 // panelHwnd 当前面板窗口句柄；非 0 = 面板已打开（单实例：再次打开 = 唤醒）
 var panelHwnd uintptr
@@ -380,34 +387,33 @@ func panelWindowMain(url string) {
 	setWindowIcon(unsafe.Pointer(hwnd), dropIco)
 	setNativeTitleBar(unsafe.Pointer(hwnd), appsUseDarkTheme())
 
-	w := webview2.NewWithOptions(webview2.WebViewOptions{
-		AutoFocus: true,
-		Window:    unsafe.Pointer(hwnd),
-	})
-	if w == nil {
+	// 直接嵌入 WebView2 到自管窗口。本版 go-webview2 的 NewWithOptions
+	// 忽略 Window 参数（永远自建窗口并把浏览器嵌进去），会产出一空壳
+	// 一内容两个面板；edge.Chromium.Embed 才是真嵌入（同步完成，失败可回退）。
+	browser := edge.NewChromium()
+	browser.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateAllow)
+	panelPinner.Pin(browser) // 递归固定整棵回调对象树，防 GC 移动（见 panelPinner 注释）
+	panelBrowser = browser   // 先挂上：Embed 内部会泵消息，窗口过程可能先于就绪被调（Resize/Focus 均 nil 安全）
+	if !browser.Embed(hwnd) {
+		panelPinner.Unpin()
+		panelBrowser = nil
 		procDestroyWindow.Call(hwnd)
 		openPanelLegacy(url)
 		return
 	}
-	panelWebview = w
 	panelHwnd = hwnd
-	// 库窗口也要图标：当前版本库忽略 Window 参数、自建真实内容窗口，
-	// 其类图标按 exe 资源 ID 32512 加载（不存在 → 标题栏空白）
-	setWindowIcon(w.Window(), dropIco)
-	// 自带窗口路径：库不会自动同步浏览器边界（停在 0x0 → 白屏），
-	// 显式设为客户区尺寸
-	w.SetSize(wpx, hpx, 0)
-	w.Navigate(url)
+	browser.Resize() // 初始边界 = 客户区（不自定会停在 0x0 → 白屏）
+	browser.Navigate(url)
 	// 隐藏状态下给渲染引擎 300ms 完成深色首绘：显示瞬间即是最终形态，
 	// 不再出现「先白后黑」的初始化闪断
 	time.Sleep(300 * time.Millisecond)
 
 	go trackPanelSize(unsafe.Pointer(hwnd), scale) // 记住上次窗口大小
 	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
-	w.Run()     // 消息泵：WM_DESTROY → PostQuitMessage 后返回
-	w.Destroy() // 释放 WebView2 controller/环境（legacy 路径有，此处曾泄漏）
+	panelMessageLoop() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
+	panelPinner.Unpin()
 	panelHwnd = 0
-	panelWebview = nil
+	panelBrowser = nil
 }
 
 func registerPanelClass(hinstance uintptr) bool {
@@ -434,29 +440,62 @@ func registerPanelClass(hinstance uintptr) bool {
 func panelWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 	const (
 		wmDestroy     = 0x0002
+		wmMove        = 0x0003
 		wmSize        = 0x0005
 		wmActivate    = 0x0006
+		wmMoving      = 0x0216
 		sizeMinimized = 1
+		waInactive    = 0
 	)
 	switch msg {
 	case wmDestroy:
 		panelHwnd = 0
-		panelWebview = nil
+		panelBrowser = nil
 		procPostQuitMessage.Call(0)
 		return 0
 	case wmSize:
-		// 最小化不处理；其余尺寸变化同步 WebView2 边界。
-		// 宽高在 lParam 的 LOWORD/HIWORD（wParam 是缩放类型 SIZE_RESTORED 等）。
-		if wp != sizeMinimized && panelWebview != nil {
-			w := int16(lp & 0xFFFF)
-			h := int16(lp >> 16)
-			if w > 0 && h > 0 {
-				panelWebview.SetSize(int(w), int(h), 0 /*HintNone*/)
-			}
+		// 最小化不处理；Resize 内部自读客户区，controller 未就绪时安全空转
+		if wp != sizeMinimized && panelBrowser != nil {
+			panelBrowser.Resize()
+		}
+	case wmActivate:
+		// 窗口获焦时把键盘焦点交给 WebView2（等价库 autofocus 行为）
+		if wp != waInactive && panelBrowser != nil {
+			panelBrowser.Focus()
+		}
+	case wmMove, wmMoving:
+		// 弹层（下拉框/提示）跟随窗口位置
+		if panelBrowser != nil {
+			panelBrowser.NotifyParentWindowPositionChanged()
 		}
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wp, lp)
 	return r
+}
+
+// winMsg GetMessageW 的消息结构。
+type winMsg struct {
+	Hwnd    uintptr
+	Message uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	PtX     int32
+	PtY     int32
+}
+
+// panelMessageLoop 面板窗口的消息泵：WM_QUIT（窗口过程 WM_DESTROY 投递）后返回。
+// 即库 WebView.Run 的精简版——面板不走 Eval/Bind，无需 dispatch 队列。
+func panelMessageLoop() {
+	var m winMsg
+	for {
+		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if r == 0 || r == ^uintptr(0) { // 0 = WM_QUIT；-1 = 错误
+			return
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+	}
 }
 
 var (
@@ -478,6 +517,9 @@ var (
 	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
 	procLoadCursorW         = user32.NewProc("LoadCursorW")
 	procFindWindowW         = user32.NewProc("FindWindowW")
+	procGetMessageW         = user32.NewProc("GetMessageW")
+	procTranslateMessage    = user32.NewProc("TranslateMessage")
+	procDispatchMessageW    = user32.NewProc("DispatchMessageW")
 )
 
 // appsUseDarkTheme 读系统「应用模式」深色设置（与面板内容的跟随信号一致）。
