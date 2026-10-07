@@ -110,9 +110,6 @@ fun iconOf(entry: HistoryEntry): ImageVector = when (entry.category) {
     else -> Icons.Filled.Description
 }
 
-val dirIcon: ImageVector = Icons.Filled.ArrowDownward
-val sendIcon: ImageVector = Icons.Filled.ArrowUpward
-
 fun fmtTime(iso: String): String = try {
     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
         .parse(iso)?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(it) } ?: ""
@@ -160,15 +157,6 @@ fun fmtSize(bytes: Long): String {
     var i = 0
     while (v >= 1024 && i < units.size - 1) { v /= 1024; i++ }
     return if (i == 0) "${bytes}B" else String.format("%.1f%s", v, units[i])
-}
-
-@Composable
-fun EllipsisText(text: String, modifier: Modifier = Modifier, maxLines: Int = 1, fontSize: Int = 15) {
-    Text(
-        text, modifier = modifier,
-        maxLines = maxLines, overflow = TextOverflow.Ellipsis,
-        fontSize = fontSize.sp, color = MaterialTheme.colorScheme.onSurface
-    )
 }
 
 // ─── 统一弹窗（与桌面面板同一设计语言）────────────────────────────

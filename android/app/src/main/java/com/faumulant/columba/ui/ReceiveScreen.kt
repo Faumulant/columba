@@ -127,6 +127,8 @@ fun ReceiveScreen(
             val list = remember(currentCat, Bus.history) {
                 Bus.history.filter { it.category == cats[currentCat] }.sortedByDescending { it.time }
             }
+            // 设置读取提升到列表级一次（此前每张卡片重组都读一遍 SharedPreferences）
+            val autoSave = AppSettings.load(LocalContext.current).isAuto
             if (list.isEmpty()) {
                 EmptyState()
             } else {
@@ -138,6 +140,7 @@ fun ReceiveScreen(
                     items(list, key = { it.id }) { e ->
                         RecordCard(
                             entry = e,
+                            autoSave = autoSave,
                             onClick = { detail = e },
                             onLongPress = { toDelete = e },
                             onSave = { onSaveRecord(e) },
@@ -176,7 +179,7 @@ fun ReceiveScreen(
                 DlgButton("删除", "danger") {
                     toDelete = null
                     val ids = listOf(e.id)
-                    Thread { val r = Go.deleteHistory(ids); Bus.refreshHistory() }.start()
+                    Bus.bg { Go.deleteHistory(ids); Bus.refreshHistory() }
                 }
             },
         )
@@ -260,8 +263,7 @@ private fun EmptyState() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecordCard(entry: HistoryEntry, onClick: () -> Unit, onLongPress: () -> Unit, onSave: () -> Unit) {
-    val s = AppSettings.load(LocalContext.current)
+private fun RecordCard(entry: HistoryEntry, autoSave: Boolean, onClick: () -> Unit, onLongPress: () -> Unit, onSave: () -> Unit) {
     Surface(
         Modifier
             .fillMaxWidth()
@@ -310,7 +312,7 @@ private fun RecordCard(entry: HistoryEntry, onClick: () -> Unit, onLongPress: ()
                 Icon(Icons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
             }
             // 手动保存模式：收到的文件给「保存」按钮（D3）
-            if (!entry.isText && entry.isRecv && entry.status == "ok" && !s.isAuto) {
+            if (!entry.isText && entry.isRecv && entry.status == "ok" && !autoSave) {
                 TextButton(onClick = onSave, modifier = Modifier.padding(start = 2.dp)) {
                     Text("保存")
                 }

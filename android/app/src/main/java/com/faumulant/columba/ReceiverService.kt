@@ -14,11 +14,15 @@ class ReceiverService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startAsForeground()
-        val err = Receiver.ensureStarted(this)
-        if (err != null) {
-            Bus.showSnackbar("接收端启动失败：$err")
-            stopSelf()
-        }
+        // ensureStarted 内含 gomobile 同步调用（绑 socket/读信任库），
+        // onStartCommand 在主线程执行，必须移出（否则开机/重启路径卡顿）
+        Thread {
+            val err = Receiver.ensureStarted(this)
+            if (err != null) {
+                Bus.showSnackbar("接收端启动失败：$err")
+                stopSelf()
+            }
+        }.start()
         return START_STICKY // App 被杀后服务重启，重挂接收端
     }
 
@@ -30,6 +34,9 @@ class ReceiverService : Service() {
     }
 
     private fun startAsForeground() {
+        // 进程可能由 BootReceiver 拉起（Activity 从未创建），渠道不一定存在，
+        // API 26+ 缺渠道会导致 startForeground 的通知投递失败
+        Notifier.ensureChannels(this)
         val n = NotificationCompat.Builder(this, Notifier.CH_STATUS)
             .setSmallIcon(R.drawable.ic_stat_columba)
             .setContentTitle("Columba")

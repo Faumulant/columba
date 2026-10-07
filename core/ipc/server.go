@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	deviceLimit      = 3
+	deviceLimit = 3
 	// Version 应用版本：/api/state 下发，面板关于卡显示；发版时同步更新
-	Version = "0.1"
+	Version          = "0.1"
 	ipcPreferredPort = 42709
 )
 
@@ -120,9 +120,6 @@ func (s *Server) TouchPanel() {
 	s.probeMu.Unlock()
 }
 
-// StartProber 面板打开期间每 30 秒后台探测一次缺失设备的地址，
-// 结果写入 probeSeen 供 onlineSet 读取；面板关闭时探测自动停止。
-// 注意：探测是对全网段的端口扫描，频率不宜再高，避免被安全软件误判。
 // StartUpdateCheck 定时查询 GitHub 最新发布版本；仓库未公开、无网络、
 // 限流时一律静默跳过（latestVer 保持空，面板不提示）。仅记录比当前
 // 版本新的 tag，下载与安装由用户在浏览器手动完成。
@@ -167,7 +164,6 @@ func (s *Server) checkLatestOnce() {
 	}
 	s.latestMu.Lock()
 	s.latestTag = tag
-	s.latestAt = time.Now()
 	s.latestMu.Unlock()
 }
 
@@ -202,6 +198,9 @@ func versionNewer(cur, latest string) bool {
 	return false
 }
 
+// StartProber 面板打开期间每 30 秒后台探测一次缺失设备的地址，
+// 结果写入 probeSeen 供 onlineSet 读取；面板关闭时探测自动停止。
+// 注意：探测是对全网段的端口扫描，频率不宜再高，避免被安全软件误判。
 func (s *Server) StartProber(ctx context.Context) {
 	go func() {
 		tick := time.NewTicker(30 * time.Second)
@@ -228,23 +227,23 @@ func (s *Server) StartProber(ctx context.Context) {
 			if !need {
 				continue
 			}
-		if found, err := transfer.Probe(s.id); err == nil {
-			s.probeMu.Lock()
-			// 整体替换为最新一轮探测结果：本轮找到 = 在线（保持到下轮）。
-			// 本轮没扫到的旧条目保留一轮宽限（Wi-Fi 探测偶发超时），
-			// 连续两轮缺失才判离线——消除扫描期间的假离线闪烁。
-			seen := map[string]time.Time{}
-			for _, t := range found {
-				seen[protocol.NormalizeID(t.ID)] = time.Now()
-			}
-			for id, ts := range s.probeSeen {
-				if _, ok := seen[id]; !ok && time.Since(ts) < 65*time.Second {
-					seen[id] = ts
+			if found, err := transfer.Probe(s.id); err == nil {
+				s.probeMu.Lock()
+				// 整体替换为最新一轮探测结果：本轮找到 = 在线（保持到下轮）。
+				// 本轮没扫到的旧条目保留一轮宽限（Wi-Fi 探测偶发超时），
+				// 连续两轮缺失才判离线——消除扫描期间的假离线闪烁。
+				seen := map[string]time.Time{}
+				for _, t := range found {
+					seen[protocol.NormalizeID(t.ID)] = time.Now()
 				}
+				for id, ts := range s.probeSeen {
+					if _, ok := seen[id]; !ok && time.Since(ts) < 65*time.Second {
+						seen[id] = ts
+					}
+				}
+				s.probeSeen = seen
+				s.probeMu.Unlock()
 			}
-			s.probeSeen = seen
-			s.probeMu.Unlock()
-		}
 		}
 	}()
 }
@@ -310,9 +309,8 @@ type Server struct {
 	probeMu   sync.Mutex
 	probeSeen map[string]time.Time
 
-	latestMu     sync.Mutex
-	latestTag    string    // GitHub 上比当前版本新的 tag（无/未知 = 空串）
-	latestAt     time.Time // 上次检查时间，避免频繁请求
+	latestMu  sync.Mutex
+	latestTag string    // GitHub 上比当前版本新的 tag（无/未知 = 空串）
 	panelAt   time.Time // 最近一次面板访问
 
 	OnShutdown func() // daemon 收到关闭指令时回调（启动器接线到退出流程）
@@ -693,6 +691,7 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
+	s.TouchPanel() // 面板活跃心跳：StartProber 只在面板打开期间工作
 	type dev struct {
 		ID     string `json:"id"`
 		Name   string `json:"name"`

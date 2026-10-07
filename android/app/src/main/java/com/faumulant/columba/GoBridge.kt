@@ -9,8 +9,9 @@ object Go {
 
     private fun <T> call(block: () -> T): Result<T> = try {
         Result.success(block())
-    } catch (e: Throwable) {
-        // gobind 包装的 Go 错误消息在异常 message 里（常带前缀），剥掉影响可读性的部分
+    } catch (e: Exception) {
+        // gobind 包装的 Go 错误消息在异常 message 里（常带前缀），剥掉影响可读性的部分。
+        // 只捕 Exception：Error（OOM 等）不应被包成 Result 吞掉
         Result.failure(RuntimeException(e.readableMessage(), e.cause ?: e))
     }
 

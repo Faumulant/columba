@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 收窄暴露面：只共享接收目录与发送暂存目录。
+     此前的 path="." 会把 data/（身份私钥、信任库、含明文的历史记录）
+     整个置于 Provider 可达范围内。 -->
 <paths>
-    <external-files-path name="external" path="." />
-    <cache-path name="cache" path="." />
+    <external-files-path name="recv" path="Receive/" />
+    <cache-path name="sends" path="sends/" />
 </paths>

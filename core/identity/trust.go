@@ -137,7 +137,7 @@ func (t *TrustStore) SetAlias(idOrName, alias string) bool {
 }
 
 // RefreshName 宣告得知对端自报名变化时刷新缓存名，让改名自动跨设备同步
-//（无需重新配对）。备注名优先显示、永不被覆盖。
+// （无需重新配对）。备注名优先显示、永不被覆盖。
 // 安全约束：组播宣告未认证、ID 可伪造，因此仅接受来源 IP 与该设备
 // 最近一次认证连接一致的宣告（LastIP），否则静默忽略。返回是否变更。
 func (t *TrustStore) RefreshName(id, name, ip string) bool {

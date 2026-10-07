@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -198,15 +199,39 @@ func RemoveSendToLink(display string) error {
 // useLegacyPanel 切回库自管路径（回滚开关）。
 const useLegacyPanel = false
 
+// panelMu 串行化面板打开请求：goroutine-per-call + 无锁全局曾让两个
+// 并发请求双双通过"已打开"检查，产出一黑（自管深色）一白（legacy 回退）
+// 两个面板。
+var panelMu sync.Mutex
+
 func OpenPanelWindow(url string) error {
 	if useLegacyPanel {
 		return openPanelLegacy(url)
+	}
+	panelMu.Lock()
+	defer panelMu.Unlock()
+	if wakeExistingPanel() {
+		return nil
 	}
 	go func() {
 		runtime.LockOSThread()
 		panelWindowMain(url)
 	}()
 	return nil
+}
+
+// wakeExistingPanel 已有面板窗口时唤醒并聚焦。用 FindWindow 按窗口类名查，
+// 跨进程同样有效——托盘的 daemon 进程与 drop panel CLI 是两个进程，
+// 进程内全局 panelHwnd 防不住跨进程重复打开。
+func wakeExistingPanel() bool {
+	cls, _ := windows.UTF16PtrFromString(panelWndClassName)
+	hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
+	if hwnd == 0 {
+		return false
+	}
+	procShowWindow.Call(hwnd, 9 /*SW_RESTORE*/)
+	procSetForegroundWindow.Call(hwnd)
+	return true
 }
 
 func openPanelLegacy(url string) error {
@@ -269,9 +294,7 @@ func panelWindowMain(url string) {
 	runtime.LockOSThread()
 	// 单实例：面板已打开 → 唤醒并聚焦，不创建第二个窗口
 	//（多窗口会与全局 webview 引用互相顶替，导致尺寸联动错乱）
-	if panelHwnd != 0 {
-		procShowWindow.Call(panelHwnd, 9 /*SW_RESTORE*/)
-		procSetForegroundWindow.Call(panelHwnd)
+	if wakeExistingPanel() {
 		return
 	}
 	lw, lh := panelLogicalSize()
@@ -334,8 +357,10 @@ func panelWindowMain(url string) {
 	// 不再出现「先白后黑」的初始化闪断
 	time.Sleep(300 * time.Millisecond)
 
+	go trackPanelSize(unsafe.Pointer(hwnd), scale) // 记住上次窗口大小
 	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
-	w.Run() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
+	w.Run()     // 消息泵：WM_DESTROY → PostQuitMessage 后返回
+	w.Destroy() // 释放 WebView2 controller/环境（legacy 路径有，此处曾泄漏）
 	panelHwnd = 0
 	panelWebview = nil
 }
@@ -347,11 +372,18 @@ func registerPanelClass(hinstance uintptr) bool {
 	wc.LpfnWndProc = windows.NewCallback(panelWndProc)
 	wc.HInstance = hinstance
 	wc.LpszClassName = uintptr(unsafe.Pointer(cls))
-	if hcur, _, err := procLoadCursorW.Call(0, 32512 /*IDC_ARROW*/); err == nil {
+	// .Call 的 err 来自 GetLastError，成功时不保证为零——按返回句柄判断
+	if hcur, _, _ := procLoadCursorW.Call(0, 32512 /*IDC_ARROW*/); hcur != 0 {
 		wc.HCursor = hcur
 	}
-	atom, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-	return atom != 0
+	atom, _, errno := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	// ERROR_CLASS_ALREADY_EXISTS：窗口类随进程终身存在，第二次打开面板时
+	// 类还在、窗口过程还是同一个，直接复用——绝不能因此降级 legacy 路径
+	//（曾因此每次重开面板都静默退回白窗）。
+	if atom == 0 && errno != windows.ERROR_CLASS_ALREADY_EXISTS {
+		return false
+	}
+	return true
 }
 
 func panelWndProc(hwnd, msg, wp, lp uintptr) uintptr {
@@ -368,10 +400,11 @@ func panelWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		procPostQuitMessage.Call(0)
 		return 0
 	case wmSize:
-		// 最小化不处理；其余尺寸变化同步 WebView2 边界
+		// 最小化不处理；其余尺寸变化同步 WebView2 边界。
+		// 宽高在 lParam 的 LOWORD/HIWORD（wParam 是缩放类型 SIZE_RESTORED 等）。
 		if wp != sizeMinimized && panelWebview != nil {
-			w := int16(wp & 0xFFFF)
-			h := int16(wp >> 16)
+			w := int16(lp & 0xFFFF)
+			h := int16(lp >> 16)
 			if w > 0 && h > 0 {
 				panelWebview.SetSize(int(w), int(h), 0 /*HintNone*/)
 			}
@@ -390,15 +423,16 @@ var (
 	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 
-	procRegisterClassExW = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
-	procShowWindow       = user32.NewProc("ShowWindow")
-	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
-	procDestroyWindow    = user32.NewProc("DestroyWindow")
-	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
+	procRegisterClassExW    = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW     = user32.NewProc("CreateWindowExW")
+	procShowWindow          = user32.NewProc("ShowWindow")
+	procDefWindowProcW      = user32.NewProc("DefWindowProcW")
+	procDestroyWindow       = user32.NewProc("DestroyWindow")
+	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
-	procLoadCursorW      = user32.NewProc("LoadCursorW")
+	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
+	procLoadCursorW         = user32.NewProc("LoadCursorW")
+	procFindWindowW         = user32.NewProc("FindWindowW")
 )
 
 // appsUseDarkTheme 读系统「应用模式」深色设置（与面板内容的跟随信号一致）。
@@ -495,11 +529,11 @@ func setWindowIcon(hwnd unsafe.Pointer, ico []byte) {
 		if int(off)+8 > len(ico) {
 			continue
 		}
-		hIcon, _, callErr := procCreateIconFromResourceEx.Call(
+		hIcon, _, _ := procCreateIconFromResourceEx.Call(
 			uintptr(unsafe.Pointer(&ico[off])),
 			uintptr(len(ico)-int(off)),
 			1, 0x00030000, size.w, size.h, 0)
-		if hIcon == 0 || callErr != nil {
+		if hIcon == 0 { // 成功时 GetLastError 不保证为零，只看句柄
 			continue
 		}
 		procSendMessageW.Call(uintptr(h), 0x0080 /*WM_SETICON*/, size.flag, hIcon)

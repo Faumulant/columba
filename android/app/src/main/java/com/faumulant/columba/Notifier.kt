@@ -40,13 +40,26 @@ object Notifier {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
-    // 传输进行中：常驻进度条（收发共用一条，完成/失败时由 onTransfer 取消）
+    // 传输进行中：常驻进度条（收发共用一条，完成/失败时由 onTransfer 取消）。
+    // 节流：Go 端按块回调时频率可达每秒几十次，每次都跨进程 IPC 到
+    // system_server——百分比未变或距上次 <200ms 时跳过（100% 强制刷）。
+    private var lastProgressAt = 0L
+    private var lastProgressPct = -1
+
     fun progress(ctx: Context, dir: String, name: String, pct: Int) {
+        val p = pct.coerceIn(0, 100)
+        val now = android.os.SystemClock.uptimeMillis()
+        if (p != 100) {
+            if (p == lastProgressPct) return
+            if (now - lastProgressAt < 200) return
+        }
+        lastProgressAt = now
+        lastProgressPct = p
         val title = if (dir == "recv") "正在接收 $name" else "正在发送 $name"
         val n = NotificationCompat.Builder(ctx, CH_TRANSFER)
             .setSmallIcon(R.drawable.ic_stat_columba)
             .setContentTitle(title)
-            .setProgress(100, pct.coerceIn(0, 100), false)
+            .setProgress(100, p, false)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()
@@ -58,6 +71,8 @@ object Notifier {
     }
 
     fun cancelProgress(ctx: Context) {
+        lastProgressAt = 0L
+        lastProgressPct = -1
         try {
             (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .cancel(ID_PROGRESS)

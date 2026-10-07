@@ -36,36 +36,50 @@ object AutoSaver {
         }
     }
 
-    // MediaStore 入相册（API 29+，无需权限）
+    // MediaStore 入相册（API 29+，无需权限）。
+    // 失败路径必须删除条目：insert 成功（IS_PENDING=1）后拷贝中断会留下
+    // 永久 PENDING 幽灵条目（相册不可见占位 + 占用 DISPLAY_NAME）。
     fun saveToGallery(ctx: Context, path: String, name: String): Boolean {
         if (Build.VERSION.SDK_INT < 29) return false
         val resolver = ctx.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
-            put(MediaStore.Images.Media.MIME_TYPE, mimeOf(name))
+            put(MediaStore.Images.Media.MIME_TYPE, mimeForName(name))
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Columba")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(
             MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values
         ) ?: return false
-        resolver.openOutputStream(uri)?.use { out ->
-            File(path).inputStream().use { it.copyTo(out) }
-        } ?: return false
+        val ok = try {
+            resolver.openOutputStream(uri)?.use { out ->
+                File(path).inputStream().use { it.copyTo(out) }
+            } != null
+        } catch (e: Exception) {
+            false
+        }
+        if (!ok) {
+            resolver.delete(uri, null, null)
+            return false
+        }
         val done = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
         resolver.update(uri, done, null, null)
         return true
     }
 
-    // SAF tree 拷贝（自动模式的目标文件夹）
+    // SAF tree 拷贝（自动模式的目标文件夹）。
+    // 失败时删除已创建的 0 字节/半截文件，避免目标文件夹残留垃圾。
     fun copyToTree(ctx: Context, treeUri: Uri, path: String, name: String) {
         val tree = DocumentFile.fromTreeUri(ctx, treeUri) ?: return
         if (!tree.canWrite()) return
-        val df = tree.createFile(mimeOf(name), name) ?: return
-        ctx.contentResolver.openOutputStream(df.uri)?.use { out ->
-            File(path).inputStream().use { it.copyTo(out) }
+        val df = tree.createFile(mimeForName(name), name) ?: return
+        val ok = try {
+            ctx.contentResolver.openOutputStream(df.uri)?.use { out ->
+                File(path).inputStream().use { it.copyTo(out) }
+            } != null
+        } catch (e: Exception) {
+            false
         }
+        if (!ok) df.delete()
     }
-
-    fun mimeOf(name: String): String = mimeForName(name)
 }

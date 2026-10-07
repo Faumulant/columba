@@ -66,6 +66,7 @@ func init() {
 
 // dbg 调试输出：数据目录根的 columba-dbg.log（adb shell 可读）。
 // gomobile bind 不转发 stderr 到 logcat，log.Printf 在安卓上是黑洞。
+// 超过 2MB 轮换一次，避免长期运行无限增长。
 func dbg(format string, args ...any) {
 	msg := fmt.Sprintf("[columba-dbg] "+format, args...)
 	log.Printf("%s", msg)
@@ -76,6 +77,10 @@ func dbg(format string, args ...any) {
 			filepath.Join(dir, "columba-dbg.log"),
 			filepath.Join(filepath.Dir(dir), "columba-dbg.log"),
 		} {
+			if st, err := os.Stat(p); err == nil && st.Size() > 2<<20 {
+				os.Remove(p + ".old")
+				os.Rename(p, p+".old")
+			}
 			if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666); err == nil {
 				f.Chmod(0o666)
 				fmt.Fprintln(f, time.Now().Format("15:04:05.000"), msg)

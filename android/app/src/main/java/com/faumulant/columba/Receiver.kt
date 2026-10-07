@@ -37,7 +37,10 @@ object Receiver {
         return File(base, "Receive")
     }
 
-    // 启动接收端；失败返回错误消息（如端口被占），成功返回 null
+    // 启动接收端；失败返回错误消息（如端口被占），成功返回 null。
+    // @Synchronized：onStart（经 Bus.bg）与配对弹窗线程可并发进入，
+    // 无锁时 running 检查与 startReceiver 之间存在重入窗口（曾可启动两次）。
+    @Synchronized
     fun ensureStarted(ctx: Context): String? {
         if (running) return null
         val c = ctx.applicationContext
@@ -55,6 +58,7 @@ object Receiver {
         return null
     }
 
+    @Synchronized
     fun stop(ctx: Context) {
         if (!running) return
         running = false
@@ -90,7 +94,14 @@ object Receiver {
     fun startPersistent(ctx: Context) {
         val c = ctx.applicationContext
         val i = Intent(c, ReceiverService::class.java)
-        c.startForegroundService(i)
+        try {
+            c.startForegroundService(i)
+        } catch (e: Exception) {
+            // Android 12+ 后台 FGS 启动限制、Android 15+ BOOT_COMPLETED 禁止
+            // dataSync 类型前台服务（ForegroundServiceStartNotAllowedException）。
+            // 崩溃不如降级：下次打开 App 时由 ensureStarted 路径补启动。
+            Bus.showSnackbar("后台启动被系统限制，请打开 App 一次以恢复接收")
+        }
     }
 
     fun stopPersistent(ctx: Context) {

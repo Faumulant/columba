@@ -20,6 +20,16 @@ object Bus : mobileapi.EventListener {
     private var appCtx: Context? = null
     private val main = Handler(Looper.getMainLooper())
 
+    // Go 绑定调用（gomobile 同步阻塞：读身份/信任库/历史 JSON、绑 socket）
+    // 一律走这个单线程执行器——串行保证 setDataDir 先于其余调用，
+    // 主线程只做 Compose 状态写入（曾全在主线程跑，冷启动/回调密集时卡顿 ANR）。
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "columba-io")
+    }
+    fun bg(block: () -> Unit) {
+        ioExecutor.execute(block)
+    }
+
     var devices by mutableStateOf<List<Device>>(emptyList())
         private set
     var history by mutableStateOf<List<HistoryEntry>>(emptyList())
@@ -31,13 +41,25 @@ object Bus : mobileapi.EventListener {
         private set
 
     // 系统分享暂存：其他 app「分享到 Columba」的内容（MainActivity 解析写入，
-    // 发送面板读取预填后 consumeShare 清空）
-    data class SharePayload(val text: String? = null, val uris: List<android.net.Uri> = emptyList())
+    // 发送面板读取预填后 consumeShare 清空）。
+    // targetId：Direct Share 直达目标（「发送给 设备X」快捷方式带过来的设备 ID）。
+    data class SharePayload(
+        val text: String? = null,
+        val uris: List<android.net.Uri> = emptyList(),
+        val targetId: String? = null,
+    )
 
     var shareIntent by mutableStateOf<SharePayload?>(null)
         private set
     fun pushShare(p: SharePayload) { shareIntent = p }
     fun consumeShare() { shareIntent = null }
+
+    // 通知点击跳接收页：MainActivity 解析 "open"="receive" 后置位，
+    // AppRoot 消费切 Tab（替代写后从不读取的 MainActivity.openReceiveTab 死状态）
+    var openReceive by mutableStateOf(false)
+        private set
+    fun pushOpenReceive() { openReceive = true }
+    fun consumeOpenReceive() { openReceive = false }
 
     // 外观模式（"system"/"light"/"dark"）：点右上角斑鸠循环切换，Theme.kt 据此生效
     var themeMode by mutableStateOf("system")
@@ -47,29 +69,38 @@ object Bus : mobileapi.EventListener {
         if (appCtx != null) return
         appCtx = ctx.applicationContext
         themeMode = AppSettings.load(appCtx!!).themeMode
-        // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，
-        // 否则会回退到 cwd 下的 .drop 生成一套错误身份）
-        Go.setDataDir(Receiver.dataDir(appCtx!!).absolutePath)
-        // 安卓默认主机名是 localhost：身份名是它（或空）时改用机型名
-        run {
+        val c = appCtx!!
+        bg {
+            // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，
+            // 否则会回退到 cwd 下的 .drop 生成一套错误身份）
+            Go.setDataDir(Receiver.dataDir(c).absolutePath)
+            // 安卓默认主机名是 localhost：身份名是它（或空）时改用机型名
             val s = Go.selfInfo()
             if (s.name.isBlank() || s.name.equals("localhost", true)) {
                 val model = android.os.Build.MODEL.trim().ifBlank { "Android 设备" }
                 Go.setDeviceName(model)
             }
+            refreshAll()
         }
-        refreshAll()
     }
 
     fun refreshAll() {
         refreshDevices()
         refreshHistory()
-        self = Go.selfInfo()
+        bg {
+            val s = Go.selfInfo()
+            main.post { self = s }
+        }
     }
 
     fun refreshDevices() {
-        devices = Go.listDevices()
-        pushShareShortcuts()
+        bg {
+            val ds = Go.listDevices()
+            main.post {
+                devices = ds
+                pushShareShortcuts()
+            }
+        }
     }
 
     // Direct Share：把每台已配对设备注册为系统分享面板的直达目标
@@ -79,9 +110,15 @@ object Bus : mobileapi.EventListener {
     private fun pushShareShortcuts() {
         val ctx = appCtx ?: return
         val sig = devices.joinToString("|") { it.id + it.name }
-        if (sig == pushedShareSig || devices.isEmpty()) return
+        if (sig == pushedShareSig) return
         pushedShareSig = sig
         try {
+            val sm = ctx.getSystemService(Context.SHORTCUT_SERVICE) as android.content.pm.ShortcutManager
+            if (devices.isEmpty()) {
+                // 设备全部移除后清空已推送的快捷方式（否则分享面板残留死目标）
+                sm.removeAllDynamicShortcuts()
+                return
+            }
             val shortcuts = devices.take(4).map { d ->
                 ShortcutInfoCompat.Builder(ctx, "share-${d.id.take(16)}")
                     .setShortLabel("发送给 ${d.name}")
@@ -91,19 +128,26 @@ object Bus : mobileapi.EventListener {
                         Intent(ctx, MainActivity::class.java).apply {
                             action = Intent.ACTION_SEND
                             type = "*/*"
+                            // 直达目标 ID：MainActivity.parseShare 读取后预选设备，
+                            // 否则点「发送给 设备X」实际会发给上次选择的设备（发错人）
+                            putExtra("target_id", d.id)
                         }
                     )
                     .setLongLived(true)
                     .addCapabilityBinding("actions.intent.SEND")
                     .build()
             }
-            val sm = ctx.getSystemService(Context.SHORTCUT_SERVICE) as android.content.pm.ShortcutManager
             sm.setDynamicShortcuts(shortcuts.map { it.toShortcutInfo() })
         } catch (_: Exception) {
             // 某些 ROM 限制快捷方式数量/能力时静默放弃（不影响普通分享路径）
         }
     }
-    fun refreshHistory() { history = Go.history() }
+    fun refreshHistory() {
+        bg {
+            val h = Go.history()
+            main.post { history = h }
+        }
+    }
 
     fun showSnackbar(msg: String) {
         main.post { snackbar = msg }
@@ -172,22 +216,21 @@ object Bus : mobileapi.EventListener {
         // 返回 false：交给 UI 弹窗（允许/拒绝 → PairDecide），超时视为拒绝
         main.post {
             if (pairRequest == null) pairRequest = PairReq(peerName, peerID)
-            else Go.pairDecide(false) // 已有一个待裁决请求，直接拒绝后来的
+            else bg { Go.pairDecide(false) } // 已有一个待裁决请求，直接拒绝后来的
         }
         return false
     }
 
     override fun onDeviceChanged() {
-        main.post { refreshDevices() }
+        refreshDevices()
     }
 
     fun resolvePairRequest(allow: Boolean) {
         val req = pairRequest
         pairRequest = null
-        // 后台线程：PairDecide 本身不阻塞，但保险起见
-        Thread {
+        bg {
             val r = Go.pairDecide(allow)
             if (allow && r.isSuccess) main.post { showSnackbar("已允许 ${req?.name} 配对") }
-        }.start()
+        }
     }
 }

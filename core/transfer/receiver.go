@@ -109,8 +109,14 @@ func (r *Receiver) pairAllowed(ip string) bool {
 	if r.pairFails == nil {
 		r.pairFails = map[string]*pairFail{}
 	}
+	// 顺手清扫过期记录，限速表只增不减会无界增长
+	for k, v := range r.pairFails {
+		if time.Since(v.winStart) > 10*time.Minute {
+			delete(r.pairFails, k)
+		}
+	}
 	f, ok := r.pairFails[ip]
-	if !ok || time.Since(f.winStart) > 10*time.Minute {
+	if !ok {
 		return true
 	}
 	return f.fails < pairFailMax
@@ -306,11 +312,16 @@ func (r *Receiver) handlePair(w http.ResponseWriter, req *http.Request) {
 		subtle.ConstantTimeCompare([]byte(st.code), []byte(strings.TrimSpace(pr.Code))) == 1
 	if valid {
 		st.used = true // 一次性：无论最终是否确认，配对码立即失效
-		r.pairMu.Lock()
-		delete(r.pairFails, hostOnly(req.RemoteAddr))
-		r.pairMu.Unlock()
 	}
 	r.pairMu.Unlock()
+	if valid {
+		// 配对码命中即清空该来源的限速记录。注意：pairFails 由
+		// pairFailsMu 保护，绝不能在持有 pairMu 的临界区里二次
+		// 加锁 pairMu（Go 互斥锁不可重入，曾在此自死锁）。
+		r.pairFailsMu.Lock()
+		delete(r.pairFails, hostOnly(req.RemoteAddr))
+		r.pairFailsMu.Unlock()
+	}
 	if !valid {
 		r.pairFail(ip)
 		if os.Getenv("DROP_DEBUG") != "" {
@@ -472,6 +483,7 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, msg, code)
 	}
 	src := &progressReader{r: io.LimitReader(req.Body, st.meta.Size+1), total: st.meta.Size, dir: "recv", peer: r.peerName(req), name: filepath.Base(st.meta.Path)}
+	stopLog := src.startLog() // 终端进度 + ProgressHook（手机端接收进度通知）
 	// 传输心跳：每分钟刷新会话活跃时间，防 janitor 误杀慢速大文件传输
 	stopHeartbeat := make(chan struct{})
 	go func() {
@@ -488,6 +500,7 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 	}()
 	n, err := io.Copy(io.MultiWriter(st.file, st.hash), src)
 	close(stopHeartbeat)
+	stopLog()
 	if err != nil {
 		discard(http.StatusBadGateway, "传输中断，已丢弃不完整文件")
 		return
@@ -561,7 +574,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		os.RemoveAll(partDir(r.dir(), cr.SessionID)) // 会话结束，清理暂存目录
 	}
 	savedPath := filepath.Join(r.dir(), final)
-		r.record(r.peerName(req), filepath.Base(final), final, st.meta.Size, true, "")
+	r.record(r.peerName(req), filepath.Base(final), final, st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
 	if r.opt.OnReceived != nil {
 		r.opt.OnReceived(r.peerName(req), filepath.Base(final), savedPath)

@@ -41,6 +41,7 @@ import com.faumulant.columba.Device
 import com.faumulant.columba.Go
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // FAB 发送面板：目标设备 + 文件（系统选择器）/ 文本
 // 失败原因内联在面板里（不再依赖会被遮罩盖住的 snackbar）
@@ -129,15 +130,19 @@ fun SendSheet(
                     val t = text.trim()
                     val uris = staged.map { it.first }
                     if (t.isEmpty() && uris.isEmpty()) return@Button
+                    val target = selectedId ?: return@Button // 按钮已在未选设备时禁用，双保险
                     sendError = null
                     busy = true
                     scope.launch(Dispatchers.IO) {
+                        // 暂存目录：发送结束（成败都算）必须清理，否则 cache 无限增长
+                        var stageDir: java.io.File? = null
                         try {
                             var ok = true
                             if (uris.isNotEmpty()) {
                                 // 每次发送独立子目录：保留原始文件名（Go 端按文件名传输），
                                 // 时间戳目录避免多次发送同名互相覆盖
                                 val dir = java.io.File(java.io.File(ctx.cacheDir, "sends"), System.nanoTime().toString())
+                                stageDir = dir
                                 dir.mkdirs()
                                 val paths = ArrayList<String>(uris.size)
                                 for (u in uris) {
@@ -153,29 +158,30 @@ fun SendSheet(
                                     } ?: continue
                                     paths.add(f.absolutePath)
                                 }
-                                val r = Go.sendFiles(selectedId ?: "", paths)
+                                val r = Go.sendFiles(target, paths)
                                 ok = r.isSuccess
                                 if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
                             }
                             if (ok && t.isNotEmpty()) {
-                                val r = Go.sendText(selectedId ?: "", t)
+                                val r = Go.sendText(target, t)
                                 ok = r.isSuccess
                                 if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
                             }
-                            withContext2 {
+                            withContext(Dispatchers.Main) {
                                 if (ok) {
                                     text = ""
                                     onDismiss()
                                 }
                             }
                         } catch (e: Exception) {
-                            withContext2 { sendError = "发送失败：${e.message}" }
+                            withContext(Dispatchers.Main) { sendError = "发送失败：${e.message}" }
                         } finally {
-                            withContext2 { busy = false }
+                            stageDir?.deleteRecursively()
+                            withContext(Dispatchers.Main) { busy = false }
                         }
                     }
                 },
-                enabled = !busy && (text.isNotBlank() || staged.isNotEmpty()),
+                enabled = !busy && selectedId != null && (text.isNotBlank() || staged.isNotEmpty()),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(12.dp),
             ) {
@@ -191,6 +197,9 @@ fun SendSheet(
                         modifier = Modifier.padding(start = 6.dp).size(15.dp),
                     )
                 }
+            }
+            if (selectedId == null) {
+                Text("先在上方选择目标设备", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
             }
 
             // 失败内联提示：面板内可见，不被遮罩遮挡
@@ -229,8 +238,3 @@ private fun Uri.displayName(ctx: android.content.Context): String {
 
 private fun sanitizeName(n: String): String =
     n.replace('/', '_').replace('\\', '_').ifBlank { "file" }
-
-// 小工具：在 IO 协程里回到主线程更新 UI
-fun withContext2(block: () -> Unit) {
-    android.os.Handler(android.os.Looper.getMainLooper()).post(block)
-}

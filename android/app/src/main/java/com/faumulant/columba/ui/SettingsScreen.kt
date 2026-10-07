@@ -43,6 +43,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +71,10 @@ fun SettingsScreen() {
     var removeDev by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
     var showRename by remember { mutableStateOf(false) }
     var aliasEdit by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
+    // 页内一次性的 SAF/权限请求触发器（曾是文件级顶层状态：跨组合泄漏、
+    // 组合内副作用，改为 remember + LaunchedEffect）
+    var folderPickRequested by remember { mutableStateOf(false) }
+    var requestNotifPerm by remember { mutableStateOf(false) }
     val self = Bus.self
 
     fun update(s: AppSettings) {
@@ -312,10 +317,12 @@ fun SettingsScreen() {
 
     // 通知权限：常驻开启时引导授予（Android 13+）
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    if (requestNotifPerm) {
-        requestNotifPerm = false
-        if (Build.VERSION.SDK_INT >= 33) {
-            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+    LaunchedEffect(requestNotifPerm) {
+        if (requestNotifPerm) {
+            requestNotifPerm = false
+            if (Build.VERSION.SDK_INT >= 33) {
+                notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 
@@ -328,9 +335,11 @@ fun SettingsScreen() {
             update(settings.copy(treeUri = uri.toString()))
         }
     }
-    if (folderPickRequested) {
-        folderPickRequested = false
-        folderPicker.launch(null)
+    LaunchedEffect(folderPickRequested) {
+        if (folderPickRequested) {
+            folderPickRequested = false
+            folderPicker.launch(null)
+        }
     }
 
     if (showAddDevice) {
@@ -366,10 +375,10 @@ fun SettingsScreen() {
                 Spacer(Modifier.width(10.dp))
                 DlgButton("移除设备", "danger") {
                     removeDev = null
-                    Thread {
+                    Bus.bg {
                         Go.removeDevice(d.id)
                         Bus.refreshDevices()
-                    }.start()
+                    }
                 }
             },
         )
@@ -381,10 +390,10 @@ fun SettingsScreen() {
             onDismiss = { aliasEdit = null },
             onSave = { alias ->
                 aliasEdit = null
-                Thread {
+                Bus.bg {
                     Go.setAlias(d.id, alias)
                     Bus.refreshDevices()
-                }.start()
+                }
             },
         )
     }
@@ -447,7 +456,7 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
                     err = "名字不能为空"
                     return@DlgButton
                 }
-                Thread {
+                Bus.bg {
                     val r = Go.setDeviceName(n)
                     if (r.isSuccess) {
                         Bus.refreshAll()
@@ -456,7 +465,7 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
                     } else {
                         err = r.exceptionOrNull()?.message ?: "改名失败"
                     }
-                }.start()
+                }
             }
         },
     )
@@ -481,10 +490,6 @@ private fun monochromeSwitchColors() = SwitchDefaults.colors(
     uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
     uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
 )
-
-// 跨组合函数传递的局部开关（页内一次性的 SAF/权限请求触发器）
-private var folderPickRequested by mutableStateOf(false)
-private var requestNotifPerm by mutableStateOf(false)
 
 private fun treeDisplayName(treeUri: String): String? {
     if (treeUri.isEmpty()) return null
@@ -548,16 +553,17 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                         )
                     }
                     TextButton(onClick = {
-                        // PairStart 要求接收端在运行
-                        val err = Receiver.ensureStarted(ctx)
-                        if (err != null) {
-                            myCodeErr = err
-                        } else {
-                            Thread {
+                        // PairStart 要求接收端在运行；ensureStarted 含 gomobile
+                        // 同步调用，必须离开主线程
+                        Bus.bg {
+                            val err = Receiver.ensureStarted(ctx)
+                            if (err != null) {
+                                myCodeErr = err
+                            } else {
                                 val r = Go.pairStart()
                                 myCodeErr = r.exceptionOrNull()?.message
                                 myCode = r.getOrNull() ?: myCode
-                            }.start()
+                            }
                         }
                     }) {
                         Text(if (myCode == null) "生成配对码" else "重新生成")
@@ -591,7 +597,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                 joining = true
                 joinMsg = null
                 val code = input.trim()
-                Thread {
+                Bus.bg {
                     // 先确保发现监听在跑（在线状态与目标解析更快命中）
                     Receiver.ensureStarted(ctx)
                     val r = Go.pairJoin(code)
@@ -602,7 +608,7 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                     } else {
                         joinMsg = r.exceptionOrNull()?.message
                     }
-                }.start()
+                }
             }
         },
     )

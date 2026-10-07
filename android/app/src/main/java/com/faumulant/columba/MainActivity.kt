@@ -48,7 +48,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -70,13 +69,11 @@ import com.faumulant.columba.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
 
-    private var openReceiveTab = false
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 沉浸式：状态栏/导航栏透出背景色，消除顶部白条
         enableEdgeToEdge()
-        openReceiveTab = intent?.getStringExtra("open") == "receive"
+        if (intent?.getStringExtra("open") == "receive") Bus.pushOpenReceive()
         Bus.init(applicationContext)
         parseShare(intent)?.let { Bus.pushShare(it) }
         Notifier.ensureChannels(this)
@@ -85,15 +82,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        openReceiveTab = intent.getStringExtra("open") == "receive"
+        if (intent.getStringExtra("open") == "receive") Bus.pushOpenReceive()
         parseShare(intent)?.let { Bus.pushShare(it) }
     }
 
-    // 解析系统分享（SEND / SEND_MULTIPLE）：文本或一个/多个内容 URI
+    // 解析系统分享（SEND / SEND_MULTIPLE）：文本或一个/多个内容 URI；
+    // target_id 为 Direct Share 快捷方式带来的直达目标设备
     private fun parseShare(intent: Intent?): Bus.SharePayload? {
         intent ?: return null
         val action = intent.action ?: return null
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
+        val targetId = intent.getStringExtra("target_id")?.takeIf { it.isNotBlank() }
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
         val streams: List<Uri> = if (action == Intent.ACTION_SEND_MULTIPLE) {
             @Suppress("DEPRECATION")
@@ -103,7 +102,7 @@ class MainActivity : ComponentActivity() {
             listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
         }
         if (text == null && streams.isEmpty()) return null
-        return Bus.SharePayload(text = text, uris = streams)
+        return Bus.SharePayload(text = text, uris = streams, targetId = targetId)
     }
 
     override fun onStart() {
@@ -113,8 +112,12 @@ class MainActivity : ComponentActivity() {
         if (s.persistent) {
             Receiver.startPersistent(this)
         } else {
-            val err = Receiver.ensureStarted(this)
-            if (err != null) Bus.showSnackbar("接收端启动失败：$err")
+            // ensureStarted 内含 gomobile 同步调用（绑 socket/读信任库），
+            // 必须离开主线程（曾在 onStart 直接调用，冷启动卡顿源）
+            Bus.bg {
+                val err = Receiver.ensureStarted(this)
+                if (err != null) Bus.showSnackbar("接收端启动失败：$err")
+            }
         }
     }
 
@@ -150,19 +153,35 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 系统分享进入：切到接收页并弹出发送面板（内容已预填）
+        // 系统分享进入：切到接收页并弹出发送面板（内容已预填）；
+        // Direct Share 直达目标带 target_id 时预选该设备（防发错人）
         LaunchedEffect(Bus.shareIntent) {
-            if (Bus.shareIntent != null) { tab = Tab.RECEIVE; showSend = true }
+            val share = Bus.shareIntent
+            if (share != null) {
+                if (share.targetId != null && Bus.devices.any { it.id == share.targetId }) {
+                    selectedTarget = share.targetId
+                }
+                tab = Tab.RECEIVE
+                showSend = true
+            }
+        }
+
+        // 通知点击（"open"="receive"）：切到接收页
+        LaunchedEffect(Bus.openReceive) {
+            if (Bus.openReceive) {
+                tab = Tab.RECEIVE
+                Bus.consumeOpenReceive()
+            }
         }
 
         val onSelectTarget: (com.faumulant.columba.Device) -> Unit = { d ->
             selectedTarget = d.id
-            Thread {
+            Bus.bg {
                 Go.setTarget(d.id)
                 applicationContext.saveSettings(
                     AppSettings.load(applicationContext).copy(lastTargetId = d.id)
                 )
-            }.start()
+            }
         }
 
         // 手动保存（D3）：SAF 创建文档
@@ -172,7 +191,7 @@ class MainActivity : ComponentActivity() {
         ) { uri: Uri? ->
             val entry = pendingSave
             if (uri != null && entry != null && entry.path.isNotEmpty()) {
-                Thread {
+                Bus.bg {
                     try {
                         contentResolver.openOutputStream(uri)?.use { out ->
                             java.io.File(entry.path).inputStream().use { it.copyTo(out) }
@@ -181,7 +200,7 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         Bus.showSnackbar("保存失败：${e.message}")
                     }
-                }.start()
+                }
             }
             pendingSave = null
         }
