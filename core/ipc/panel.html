@@ -612,6 +612,15 @@ function doUnlock() {
   j("unlock", {method:"POST"}).then(() => { ui("unlockMask", 0); toast("已解锁，设备数量不再受限"); refresh() })
    .catch(() => toast("解锁失败", {err:true,sticky:true}));
 }
+function installFF() {
+  api("firefox-ext", {method:"POST"}).then(r => r.ok ? r.json() : Promise.reject())
+    .then(x => { toast(x.warning || "已登记，重启 Firefox 后生效"); refresh() })
+    .catch(() => toast("登记失败：exe 同级需存在 extension\\firefox 目录", {err:true,sticky:true}));
+}
+function revealExt() {
+  if (!S.firefox_dir) return toast("未找到扩展目录（exe 同级需存在 extension\\firefox）", {err:true,sticky:true});
+  dropURL("reveal", S.firefox_dir);
+}
 function copyUS() {
   fetch(S.userscript_url).then(r => r.text()).then(t => {
     navigator.clipboard.writeText(t);

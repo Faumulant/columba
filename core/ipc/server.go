@@ -730,6 +730,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"ext_dir_chromium":   chromiumExtDir(),
 		"firefox_registered": platform.FirefoxExtensionRegistered(),
 		"autostart":          platform.AutostartEnabled(),
+		"firefox_dir":        FirefoxExtDir(),
 		"userscript_url":     "/userscript.user.js?t=" + s.token,
 		"history":            history.Load(),
 	})
