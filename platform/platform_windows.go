@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -240,7 +241,7 @@ func RemoveSendToLink(display string) error {
 // OpenPanelWindow 打开面板窗口：窗口生命周期完全自管——隐藏创建 →
 // 设图标/深色标题栏/DWM → 嵌入 WebView2 → 导航 → 深色首绘完成后才显示。
 // useLegacyPanel 切回库自管路径（回滚开关）。
-const useLegacyPanel = true
+const useLegacyPanel = false
 
 // panelMu 串行化面板打开请求：goroutine-per-call + 无锁全局曾让两个
 // 并发请求双双通过"已打开"检查，产出一黑（自管深色）一白（legacy 回退）
@@ -257,10 +258,34 @@ func OpenPanelWindow(url string) error {
 		return nil
 	}
 	go func() {
+		// panic 防护网：面板窗口的任何崩溃只损失这一次打开，
+		// daemon/托盘/传输不受影响；堆栈落盘（daemon.log）供定位
+		defer func() {
+			if r := recover(); r != nil {
+				logPanelCrash(fmt.Sprintf("面板窗口 panic: %v\n%s", r, debug.Stack()))
+			}
+		}()
 		runtime.LockOSThread()
 		panelWindowMain(url)
 	}()
 	return nil
+}
+
+// logPanelCrash 把面板窗口 goroutine 的 panic 堆栈追加进 daemon.log，
+// 与 cmd_run 的 DebugLog 同款格式与 2MB 轮换。写日志失败静默返回：
+// 崩溃处理路径上不能让日志问题再放大成二次 panic。
+func logPanelCrash(msg string) {
+	logPath := filepath.Join(identity.AppDir(), "daemon.log")
+	if st, err := os.Stat(logPath); err == nil && st.Size() > 2<<20 {
+		os.Remove(logPath + ".old")
+		os.Rename(logPath, logPath+".old")
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, time.Now().Format("01-02 15:04:05.000 ")+msg)
 }
 
 // wakeExistingPanel 已有面板窗口时唤醒并聚焦。用 FindWindow 按窗口类名查，
