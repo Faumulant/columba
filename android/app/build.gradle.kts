@@ -21,6 +21,9 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 日常安装走 release 形态（R8 收缩 + 资源裁剪）：签名复用 debug
+            // 密钥，与 debug 包同签名可原地覆盖升级，无需额外密钥管理
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
