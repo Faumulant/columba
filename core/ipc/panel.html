@@ -297,11 +297,13 @@ input.codein:focus{border-color:var(--sub)}
 <div class="mask" id="aliasMask" onclick="if(event.target===this)ui('aliasMask',0)">
   <div class="modal" style="width:320px">
     <b>修改备注名</b>
-    <div style="font-size:12.5px;color:var(--sub);margin:10px 0 0">给「<b id="aliasDev">…</b>」起个本机备注；留空则恢复显示对方自报名。备注只在本机生效。</div>
+    <div style="font-size:13px;color:var(--sub);margin:10px 0 0">给「<span id="aliasDev">…</span>」的备注仅本机可见，留空恢复对方自报名。</div>
     <input id="aliasIn" maxlength="30" placeholder="备注名（留空清除）"
       style="width:100%;box-sizing:border-box;font-size:14px;padding:10px 12px;margin:12px 0 2px;border:1.5px solid var(--line);border-radius:10px;outline:none">
-    <button class="btn pri" style="width:100%;padding:10px;margin-top:8px" onclick="aliasSave()">保存</button>
-    <button class="btn" style="width:100%;padding:9px;margin-top:8px" onclick="ui('aliasMask',0)">取消</button>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" style="padding:7px 14px" onclick="ui('aliasMask',0)">取消</button>
+      <button class="btn pri" style="padding:7px 14px" onclick="aliasSave()">保存</button>
+    </div>
   </div>
 </div>
 
