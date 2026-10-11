@@ -436,6 +436,9 @@ func (st *state) watchOnline(ctx context.Context) {
 		}
 		cur := map[string]bool{}
 		for _, p := range tr.Snapshot() {
+			if time.Since(p.Seen) >= 30*time.Second {
+				continue // 宣告已过期：视为离线（与 ListDevices 同一窗口）
+			}
 			cur[protocol.NormalizeID(p.Announce.ID)] = true
 		}
 		if !sameKeys(cur, last) {
@@ -512,7 +515,7 @@ func (st *state) probeOnce() {
 // ─── 设备与配对 ──────────────────────────────────────────────────
 
 // ListDevices 已配对设备列表（JSON）：[{"id","name","online"}]，
-// name 为显示名（备注优先），online 为最近 20 秒内有无宣告。
+// name 为显示名（备注优先），online 为最近 30 秒内有无宣告。
 func ListDevices() string {
 	d, err := st.device()
 	if err != nil {
@@ -532,7 +535,7 @@ func ListDevices() string {
 		online := false
 		if tr != nil {
 			for _, lp := range tr.Snapshot() {
-				if protocol.NormalizeID(lp.Announce.ID) == p.ID {
+				if time.Since(lp.Seen) < 30*time.Second && protocol.NormalizeID(lp.Announce.ID) == p.ID {
 					online = true
 					break
 				}

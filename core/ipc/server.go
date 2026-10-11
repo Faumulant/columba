@@ -740,6 +740,9 @@ func (s *Server) onlineSet() map[string]bool {
 	defer s.probeMu.Unlock()
 	online := map[string]bool{}
 	for _, info := range s.peers.Snapshot() {
+		if time.Since(info.Seen) > 30*time.Second {
+			continue // 宣告已过期：视为离线（组播消失后不再永久在线）
+		}
 		online[protocol.NormalizeID(info.Announce.ID)] = true
 	}
 	for id := range s.probeSeen {
