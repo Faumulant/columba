@@ -480,7 +480,7 @@ function renderSet(m) {
    <div class="setcard">
    ${S.devices.map(d => `<div class="setrow"><span class="dot ${d.online ? "on" : "off"}"></span>
    <span class="k">${esc(d.name)}</span><span class="v">${d.online ? "在线" : "离线"}</span>
-   <button class="x" title="移除" onclick='rmDev(${jsStr(d.id)},${jsStr(d.name)})'>✕</button></div>`).join("")}
+   <button class="dev-alias" title="修改备注名" onclick='aliasOpen(${jsStr(d.id)},${jsStr(d.name)})'>✎</button><button class="x" title="移除" onclick='rmDev(${jsStr(d.id)},${jsStr(d.name)})'>✕</button></div>`).join("")}
    <button class="add" onclick="pairOpen()">＋ 添加设备</button>
    ${S.unlocked ? "" : `<div class="unlock-entry" onclick="ui('unlockMask',1)">点击解锁三台限制</div>`}
    </div>

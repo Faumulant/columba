@@ -446,6 +446,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Write([]byte(s.userscript()))
 	case req.URL.Path == "/panel":
+		// no-store：面板 HTML 编译进 exe，每次升级内容都变而 URL 不变
+		//（token 持久），禁缓存保证新面板必达 WebView2。
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(panelHTML)
 	case strings.HasPrefix(req.URL.Path, "/api/"):
