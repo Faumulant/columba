@@ -99,7 +99,11 @@ fun ReceiveScreen(
                 modifier = Modifier
                     .size(28.dp)
                     .rotate(-8f)
-                    .clickable { Bus.cycleTheme() },
+                    // 无涟漪：主题翻转本身就是最醒目的反馈（暗底涟漪泛白刺眼）
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { Bus.cycleTheme() },
             )
         }
 
