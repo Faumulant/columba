@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"time"
@@ -37,9 +38,16 @@ func cmdSend(args []string) error {
 	}
 	var t transfer.Target
 	var sent string
+	// CLI 侧发现/探测日志落 stderr：send -to 失败时可见发现路径卡在哪一层
+	transfer.DebugLog = func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[send] "+f+"\n", a...) }
 	run := func() error {
 		if *addr != "" {
-			t = transfer.Target{Addr: *addr, ID: *to}
+			// 直连目标以主机名入库作对端显示名，避免失败记录对端名空白
+			host := *addr
+			if h, _, err := net.SplitHostPort(*addr); err == nil {
+				host = h
+			}
+			t = transfer.Target{Addr: *addr, ID: *to, Name: host}
 		} else if ct, ok := transfer.CachedTarget(id, protocol.NormalizeID(*to)); ok {
 			t = ct // 缓存直连：省去发现/探测
 		} else {

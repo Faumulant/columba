@@ -110,19 +110,32 @@ fun iconOf(entry: HistoryEntry): ImageVector = when (entry.category) {
     else -> Icons.Filled.Description
 }
 
+// 历史时间：Go 侧 RFC3339（移动进程无 TZ 环境，存的是 UTC），用 java.time
+// 解析并转系统时区显示。java.text.DateFormat 解析不了 ISO-8601，曾走兜底
+// 把原始 UTC 串直接显示出来（时间差 8 小时，真机实测）。
 fun fmtTime(iso: String): String = try {
-    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-        .parse(iso)?.let { DateFormat.getTimeInstance(DateFormat.SHORT).format(it) } ?: ""
+    val d = java.time.OffsetDateTime.parse(iso).atZoneSameInstant(java.time.ZoneId.systemDefault())
+    java.time.format.DateTimeFormatter.ofPattern("HH:mm").format(d)
 } catch (e: Exception) {
-    iso.take(16).replace('T', ' ')
+    try {
+        val d = java.time.LocalDateTime.parse(iso.take(19))
+        java.time.format.DateTimeFormatter.ofPattern("HH:mm").format(d)
+    } catch (e2: Exception) {
+        iso.take(16).replace('T', ' ')
+    }
 }
 
 // 完整时间（详情里用）
 fun fmtTimeFull(iso: String): String = try {
-    val d = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).parse(iso)
-    if (d != null) DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(d.time)) else iso
+    val d = java.time.OffsetDateTime.parse(iso).atZoneSameInstant(java.time.ZoneId.systemDefault())
+    java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(d)
 } catch (e: Exception) {
-    iso
+    try {
+        val d = java.time.LocalDateTime.parse(iso.take(19))
+        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(d)
+    } catch (e2: Exception) {
+        iso
+    }
 }
 
 // 部分 ROM（荣耀 MagicOS/Android 16 实测）的 MimeTypeMap 对常见扩展名也返回
