@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
@@ -63,6 +64,7 @@ import com.faumulant.columba.ui.AppDialog
 import com.faumulant.columba.ui.ColumbaTheme
 import com.faumulant.columba.ui.DlgButton
 import com.faumulant.columba.ui.HairlineColor
+import com.faumulant.columba.ui.isAppDark
 import com.faumulant.columba.ui.ReceiveScreen
 import com.faumulant.columba.ui.SendSheet
 import com.faumulant.columba.ui.SettingsScreen
@@ -77,7 +79,25 @@ class MainActivity : ComponentActivity() {
         Bus.init(applicationContext)
         parseShare(intent)?.let { Bus.pushShare(it) }
         Notifier.ensureChannels(this)
-        setContent { ColumbaTheme { AppRoot() } }
+        setContent {
+            ColumbaTheme {
+                // 系统栏外观跟随「生效主题」而非系统深浅：enableEdgeToEdge() 在
+                // onCreate 只按系统模式设一次，点斑鸠切日间后界面变白而系统仍按
+                // 深色给白图标 → 白底白图标不可见。主题变化即重刷。
+                val appDark = isAppDark()
+                LaunchedEffect(appDark) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.auto(
+                            android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
+                        ) { appDark },
+                        navigationBarStyle = SystemBarStyle.auto(
+                            android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
+                        ) { appDark },
+                    )
+                }
+                AppRoot()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
