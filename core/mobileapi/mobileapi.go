@@ -345,6 +345,17 @@ func StartDiscovery(listener EventListener) error {
 	return st.ensureDiscovery(false)
 }
 
+// TriggerDiscover 立即广播一轮宣告（点信标「立即重发现」用），不打断
+// 周期循环；发现未启动时为空操作。实际发送在发现协程内完成。
+func TriggerDiscover() {
+	st.mu.Lock()
+	d := st.disc
+	st.mu.Unlock()
+	if d != nil {
+		d.AnnounceNow()
+	}
+}
+
 // StopDiscovery 停止发现监听。在线状态随之全部离线。
 func StopDiscovery() {
 	st.mu.Lock()

@@ -52,6 +52,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -450,7 +453,19 @@ private fun ReceiveBeacon(modifier: Modifier = Modifier) {
         animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
         label = "beaconT",
     ).value
-    Canvas(modifier.size(36.dp)) {
+    val haptic = LocalHapticFeedback.current
+    Canvas(
+        modifier
+            .size(36.dp)
+            // 点信标 = 立即重发现：发现异常时用户唯一的自救入口（无涟漪）
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                Bus.triggerRediscover()
+            },
+    ) {
         val dotR = 4.2.dp.toPx()
         if (active) {
             // 两圈波纹：半周期错相，向外扩散并渐隐

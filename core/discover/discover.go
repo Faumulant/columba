@@ -44,6 +44,9 @@ type Discovery struct {
 	events chan Event
 	stop   chan struct{}
 	once   sync.Once
+	now    chan struct{} // 触发立即宣告（点信标「立即重发现」）；缓冲 1，连点合并
+	amu    sync.Mutex
+	ann    []byte // 最近一次宣告载荷；AnnounceNow 复用，未宣告时为 nil
 }
 
 // New 绑定发现端口、加入组播组并开始收包。
@@ -62,6 +65,7 @@ func New(selfID string) (*Discovery, error) {
 		group:  group,
 		events: make(chan Event, 16),
 		stop:   make(chan struct{}),
+		now:    make(chan struct{}, 1),
 	}
 	all, err := net.Interfaces()
 	if err != nil || len(all) == 0 {
@@ -104,6 +108,9 @@ func (d *Discovery) Events() <-chan Event { return d.events }
 // StartAnnouncing 周期性地在每张已加入的网卡上宣告本机身份。
 func (d *Discovery) StartAnnouncing(a protocol.Announce) {
 	b, _ := json.Marshal(a)
+	d.amu.Lock()
+	d.ann = b
+	d.amu.Unlock()
 	go func() {
 		tick := time.NewTicker(AnnounceEvery)
 		defer tick.Stop()
@@ -113,9 +120,20 @@ func (d *Discovery) StartAnnouncing(a protocol.Announce) {
 			case <-d.stop:
 				return
 			case <-tick.C:
+			case <-d.now:
 			}
 		}
 	}()
+}
+
+// AnnounceNow 触发一轮立即宣告，不打断周期循环，连点合并为一次。
+// 未在宣告中为空操作。所有发送仍在发现协程内执行：SetMulticastInterface
+// 是连接级状态，跨 goroutine 并发设置会互相干扰。
+func (d *Discovery) AnnounceNow() {
+	select {
+	case d.now <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Discovery) sendAll(b []byte) {

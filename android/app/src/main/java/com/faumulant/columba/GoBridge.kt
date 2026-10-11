@@ -28,6 +28,7 @@ object Go {
     fun setDataDir(dir: String): Result<Unit> = call { Mobileapi.setDataDir(dir) }
     fun setDeviceName(name: String): Result<Unit> = call { Mobileapi.setDeviceName(name) }
     fun setPort(port: Int): Result<Unit> = call { Mobileapi.setPort(port.toLong()) }
+    fun triggerDiscover(): Result<Unit> = call { Mobileapi.triggerDiscover() }
     fun selfInfo(): SelfInfo = try {
         SelfInfo.parse(Mobileapi.selfInfo())
     } catch (e: Throwable) {

@@ -103,6 +103,14 @@ object Bus : mobileapi.EventListener {
         }
     }
 
+    /** 立即重发现：点信标触发。广播一轮宣告（Go 侧非阻塞），本机在线
+     *  状态等对端周期宣告到达 tracker 后才刷新，故立即刷一次 + 2s 后补刷。 */
+    fun triggerRediscover() {
+        bg { Go.triggerDiscover() }
+        refreshDevices()
+        main.postDelayed({ refreshDevices() }, 2000)
+    }
+
     // Direct Share：把每台已配对设备注册为系统分享面板的直达目标
     //（其他 app 点分享 → 顶部直接出现「发送给 设备名」→ 内容直接进入发送流程）。
     // 设备列表（ID/名字）变化时才推送，在线抖动不触发。
