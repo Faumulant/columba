@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Columba 色板方向对比</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:#888;color:#333;padding:28px}
+h1{font-size:17px;margin-bottom:4px;color:#fff}
+p.tip{font-size:12.5px;color:#eee;margin-bottom:22px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(340px,420px));gap:26px;justify-content:center}
+@media(max-width:860px){.grid{grid-template-columns:minmax(340px,420px)}}
+.scheme h2{font-size:14px;color:#fff;margin:0 0 10px;font-weight:600}
+.scheme h2 small{font-weight:400;opacity:.75;margin-left:8px;font-size:12px}
+.phone{border-radius:14px;overflow:hidden;border:1px solid rgba(128,128,128,.4)}
+.cell{padding:13px 14px;font-size:12.5px;line-height:1.55}
+.top{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.tname{font-weight:600}
+.tstate{margin-left:auto;font-size:11.5px;color:var(--sub)}
+.row{display:flex;align-items:center;gap:9px;padding:9px 4px;border-bottom:1px solid var(--hairline)}
+.chip{font-size:10.5px;padding:2px 7px;border-radius:99px;background:var(--fill-1);color:var(--sub)}
+.chip.in{background:var(--ok-tint);color:var(--ok)}
+.rname{font-weight:600}
+.rtime{margin-left:auto;font-size:11px;color:var(--faint)}
+.btns{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.btn{font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid var(--line-2);background:transparent;color:var(--txt);cursor:default}
+.btn.pri{background:var(--accent);border-color:transparent;color:var(--on-accent);font-weight:600}
+.btn.danger{color:var(--err);border-color:var(--err)}
+.tst{margin-top:12px;display:flex;justify-content:flex-end}
+.toast{display:flex;align-items:center;gap:8px;background:var(--accent);color:var(--on-accent);font-size:12px;padding:10px 14px;border-radius:12px;box-shadow:var(--shadow)}
+.toast.err{box-shadow:var(--shadow), inset 0 0 0 1.5px var(--err)}
+.toast.err::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--err)}
+</style>
+</head>
+<body>
+<h1>Columba 色板方向对比（仅预览，未动软件）</h1>
+<p class="tip">同一块面板小样 × 四个灰阶站位 × 深浅两模式。看大感觉：哪个的「黑/白量」和层次最接近你想要的 agent 风。</p>
+<div class="grid" id="grid"></div>
+
+<script>
+const MOCK = `
+  <div class="top"><span class="dot"></span><span class="tname">我的电脑</span><span class="tstate">在线 · 42707</span></div>
+  <div class="cell">
+    <div class="row"><span class="rname">照片合集.zip</span><span class="chip in">← 收到 · 荣耀手机</span><span class="rtime">14:02</span></div>
+    <div class="row"><span class="rname">会议纪要.txt</span><span class="chip">→ 发出 · 台式机</span><span class="rtime">13:47</span></div>
+    <div class="row"><span class="rname">demo.mp4</span><span class="chip in">← 收到 · 荣耀手机</span><span class="rtime">昨天</span></div>
+    <div class="btns"><span class="btn">取消</span><span class="btn danger">删除</span><span class="btn pri">主操作</span></div>
+    <div class="tst"><span class="toast err">未选择文件夹</span></div>
+    <div class="tst"><span class="toast">已复制到剪贴板</span></div>
+  </div>`;
+
+const SCHEMES = [
+  { name:"A · 现状", note:"对照：深 4% / 浅 98%",
+    dark:{bg:"#0B0B0C",main:"#0B0B0C",card:"#151517",txt:"#F2F2F0",sub:"#8F8F8B",faint:"#777773",line:"#2A2A2D",hairline:"rgba(255,255,255,.08)",line2:"rgba(255,255,255,.16)",accent:"#F5F5F2",onacc:"#0B0B0C",ok:"#8FAE8B",err:"#C08A7E",okt:"rgba(143,174,139,.16)",f1:"rgba(255,255,255,.05)",shadow:"0 10px 30px rgba(0,0,0,.5)"},
+    light:{bg:"#FAFAF8",main:"#FFFFFF",card:"#FFFFFF",txt:"#171716",sub:"#6E6E6A",faint:"#9A9A95",line:"#E4E4E0",hairline:"rgba(0,0,0,.08)",line2:"rgba(0,0,0,.16)",accent:"#171716",onacc:"#FAFAF8",ok:"#5F7A5B",err:"#A85A4C",okt:"rgba(95,122,91,.14)",f1:"rgba(23,23,22,.05)",shadow:"0 10px 30px rgba(0,0,0,.12)"} },
+  { name:"B · 中灰 · 冷", note:"agent 常见站位：深 10-14% / 浅 95%",
+    dark:{bg:"#16171A",main:"#16171A",card:"#1F2125",txt:"#F0F0EE",sub:"#909095",faint:"#6F7076",line:"#2C2E33",hairline:"rgba(255,255,255,.09)",line2:"rgba(255,255,255,.18)",accent:"#E8E8E6",onacc:"#16171A",ok:"#8FAE8B",err:"#C68F82",okt:"rgba(143,174,139,.16)",f1:"rgba(255,255,255,.06)",shadow:"0 10px 30px rgba(0,0,0,.45)"},
+    light:{bg:"#F2F3F2",main:"#FFFFFF",card:"#FFFFFF",txt:"#1B1C1A",sub:"#66686A",faint:"#93959A",line:"#E2E4E3",hairline:"rgba(0,0,0,.08)",line2:"rgba(0,0,0,.16)",accent:"#1B1C1A",onacc:"#F7F7F5",ok:"#5F7A5B",err:"#A85A4C",okt:"rgba(95,122,91,.13)",f1:"rgba(27,28,26,.05)",shadow:"0 10px 30px rgba(0,0,0,.10)"} },
+  { name:"C · 中灰 · 暖", note:"微暖纸感：深暖灰 / 浅米白",
+    dark:{bg:"#191816",main:"#191816",card:"#222120",txt:"#F2F1EC",sub:"#96948C",faint:"#75736C",line:"#302E2B",hairline:"rgba(255,255,255,.09)",line2:"rgba(255,255,255,.18)",accent:"#EAE8E0",onacc:"#191816",ok:"#93AC8C",err:"#C99384",okt:"rgba(147,172,140,.16)",f1:"rgba(255,255,255,.06)",shadow:"0 10px 30px rgba(0,0,0,.45)"},
+    light:{bg:"#F4F2ED",main:"#FFFFFF",card:"#FFFFFF",txt:"#1E1D1A",sub:"#6B6960",faint:"#98968C",line:"#E5E2DA",hairline:"rgba(0,0,0,.08)",line2:"rgba(0,0,0,.16)",accent:"#1E1D1A",onacc:"#F7F5F0",ok:"#5F7A5B",err:"#A85A4C",okt:"rgba(95,122,91,.13)",f1:"rgba(30,29,26,.05)",shadow:"0 10px 30px rgba(0,0,0,.10)"} },
+  { name:"D · 小步折中", note:"只微调：深 7-9% / 浅 96-97%",
+    dark:{bg:"#121316",main:"#121316",card:"#1B1C20",txt:"#F1F1EF",sub:"#8F9094",faint:"#73747A",line:"#27282D",hairline:"rgba(255,255,255,.08)",line2:"rgba(255,255,255,.17)",accent:"#EEEEEC",onacc:"#121316",ok:"#8FAE8B",err:"#C48C7F",okt:"rgba(143,174,139,.16)",f1:"rgba(255,255,255,.055)",shadow:"0 10px 30px rgba(0,0,0,.48)"},
+    light:{bg:"#F6F6F4",main:"#FFFFFF",card:"#FFFFFF",txt:"#191918",sub:"#6A6A67",faint:"#96968F",line:"#E6E6E2",hairline:"rgba(0,0,0,.08)",line2:"rgba(0,0,0,.16)",accent:"#191918",onacc:"#FAFAF8",ok:"#5F7A5B",err:"#A85A4C",okt:"rgba(95,122,91,.13)",f1:"rgba(25,25,24,.05)",shadow:"0 10px 30px rgba(0,0,0,.11)"} },
+];
+
+function cell(s, m, mode) {
+  const v = `--bg:${m.bg};--main:${m.main};--card:${m.card};--txt:${m.txt};--sub:${m.sub};--faint:${m.faint};--line:${m.line};--hairline:${m.hairline};--line-2:${m.line2};--accent:${m.accent};--on-accent:${m.onacc};--ok:${m.ok};--err:${m.err};--ok-tint:${m.okt};--fill-1:${m.f1};--shadow:${m.shadow}`;
+  return `<div class="phone p${s}${mode}">
+    <style>.p${s}${mode}{${v}} .p${s}${mode} .phone{background:var(--bg);color:var(--txt)} .p${s}${mode} .top{border-color:var(--line);background:var(--main)} .p${s}${mode} .cell{background:var(--bg)} .p${s}${mode} .row{border-color:var(--hairline)} .p${s}${mode} .rname,.p${s}${mode} .tname{color:var(--txt)} .p${s}${mode} .tstate,.p${s}${mode} .rtime{color:var(--sub)} .p${s}${mode} .chip{background:var(--fill-1);color:var(--sub)} .p${s}${mode} .chip.in{background:var(--ok-tint);color:var(--ok)} .p${s}${mode} .btn{border-color:var(--line-2);color:var(--txt)} .p${s}${mode} .btn.pri{background:var(--accent);color:var(--on-accent);border-color:transparent} .p${s}${mode} .btn.danger{color:var(--err);border-color:var(--err)} .p${s}${mode} .toast{background:var(--accent);color:var(--on-accent)} .p${s}${mode} .toast.err{box-shadow:0 6px 22px rgba(0,0,0,.25), inset 0 0 0 1.5px var(--err)}</style>
+    ${MOCK}
+  </div>`;
+}
+
+const grid = document.getElementById("grid");
+SCHEMES.forEach((sc, i) => {
+  const div = document.createElement("div");
+  div.className = "scheme";
+  div.innerHTML = `<h2>${sc.name}<small>${sc.note}</small></h2>
+    <div style="margin-bottom:8px">${cell(i, sc.dark, "d")}</div>
+    <div>${cell(i, sc.light, "l")}</div>`;
+  grid.appendChild(div);
+});
+</script>
+</body>
+</html>
