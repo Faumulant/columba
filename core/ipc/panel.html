@@ -460,7 +460,7 @@ function render() {
 function renderSet(m) {
   const lim = S.unlocked ? "∞" : S.limit;
   m.innerHTML = `<div class="set">
-   <div class="head" style="padding:0 0 4px"><h1>设置</h1><span class="count">Columba 面板</span></div>
+   <div class="head" style="padding:0 0 4px"><h1>设置</h1></div>
    <h2>常规</h2>
    <div class="setcard"><div class="setrow"><span class="k">开机自启</span>
    <span class="v">登录后自动运行后台</span>
@@ -472,7 +472,6 @@ function renderSet(m) {
    <button class="btn" onclick='dropURL("open", S.recv_dir)'>打开</button></div></div>
    <h2>外观</h2>
    <div class="setcard"><div class="setrow"><span class="k">主题</span>
-   <span class="v">浅色 · 深色 · 跟随系统</span>
    <div class="seg">
     <button class="segbtn ${themeMode()==="light"?"on":""}" title="浅色" onclick="setTheme('light')">${icoSun}</button>
     <button class="segbtn ${themeMode()==="dark"?"on":""}" title="深色" onclick="setTheme('dark')">${icoMoon}</button>
@@ -481,7 +480,7 @@ function renderSet(m) {
    <h2>设备管理 · ${S.devices.length}/${lim}</h2>
    <div class="setcard">
    ${S.devices.map(d => `<div class="setrow"><span class="dot ${d.online ? "on" : "off"}"></span>
-   <span class="k">${esc(d.name)}</span><span class="v">${d.online ? "在线" : "离线"} · ${esc(d.id.slice(0, 9))}…</span>
+   <span class="k">${esc(d.name)}</span><span class="v">${d.online ? "在线" : "离线"}</span>
    <button class="x" title="移除" onclick='rmDev(${jsStr(d.id)},${jsStr(d.name)})'>✕</button></div>`).join("")}
    <button class="add" onclick="pairOpen()">＋ 添加设备</button>
    ${S.unlocked ? "" : `<div class="unlock-entry" onclick="ui('unlockMask',1)">点击解锁三台限制</div>`}
