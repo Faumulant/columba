@@ -20,6 +20,7 @@ type Chromium struct {
 	controller            *ICoreWebView2Controller
 	webview               *ICoreWebView2
 	inited                uintptr
+	failed                uint32 // 环境/controller 创建失败标志：Embed 等待泵见此即返回 false（见 EnvironmentCompleted 注释）
 	envCompleted          *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
 	controllerCompleted   *iCoreWebView2CreateCoreWebView2ControllerCompletedHandler
 	webMessageReceived    *iCoreWebView2WebMessageReceivedEventHandler
@@ -97,6 +98,9 @@ func (e *Chromium) Embed(hwnd uintptr) bool {
 		if atomic.LoadUintptr(&e.inited) != 0 {
 			break
 		}
+		if atomic.LoadUint32(&e.failed) != 0 {
+			return false // 环境/controller 创建失败：如实上报，由调用方决定回退
+		}
 		r, _, _ := w32.User32GetMessageW.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0,
@@ -108,6 +112,9 @@ func (e *Chromium) Embed(hwnd uintptr) bool {
 		}
 		_, _, _ = w32.User32TranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		_, _, _ = w32.User32DispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+	}
+	if atomic.LoadUintptr(&e.inited) == 0 {
+		return false // 消息泵先于就绪退出（如窗口被销毁）：webview 未就绪，Init 会空指针
 	}
 	e.Init("window.external={invoke:s=>window.chrome.webview.postMessage(s)}")
 	return true
@@ -169,8 +176,13 @@ func (e *Chromium) Release() uintptr {
 }
 
 func (e *Chromium) EnvironmentCompleted(res uintptr, env *ICoreWebView2Environment) uintptr {
-	if int64(res) < 0 {
-		log.Fatalf("Creating environment failed with %08x", res)
+	if int64(res) < 0 || env == nil {
+		// 创建失败：HRESULT 负值，或 S_OK 但环境为空（加载器同步失败路径会这样回调）。
+		// 置 failed 让 Embed 的等待泵返回 false。绝不能 log.Fatalf——那是 os.Exit，
+		// 曾直接杀死嵌入本库的宿主 daemon 进程，Go 的 recover 也拦不住。
+		log.Printf("Creating environment failed with %08x (env nil: %v)", res, env == nil)
+		atomic.StoreUint32(&e.failed, 1)
+		return 0
 	}
 	_, _, _ = env.vtbl.AddRef.Call(uintptr(unsafe.Pointer(env)))
 	e.environment = env
@@ -184,8 +196,10 @@ func (e *Chromium) EnvironmentCompleted(res uintptr, env *ICoreWebView2Environme
 }
 
 func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller *ICoreWebView2Controller) uintptr {
-	if int64(res) < 0 {
-		log.Fatalf("Creating controller failed with %08x", res)
+	if int64(res) < 0 || controller == nil {
+		log.Printf("Creating controller failed with %08x (controller nil: %v)", res, controller == nil)
+		atomic.StoreUint32(&e.failed, 1)
+		return 0
 	}
 	_, _, _ = controller.vtbl.AddRef.Call(uintptr(unsafe.Pointer(controller)))
 	e.controller = controller

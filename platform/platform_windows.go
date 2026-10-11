@@ -29,6 +29,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"drop/core/identity"
+	"drop/core/transfer"
 )
 
 // 通知归属 AUMID：借用 PowerShell 的 AppID，保证未注册自有 AUMID 时
@@ -423,6 +424,9 @@ func panelWindowMain(url string) {
 		panelPinner.Unpin()
 		panelBrowser = nil
 		procDestroyWindow.Call(hwnd)
+		if transfer.DebugLog != nil {
+			transfer.DebugLog("面板 v3 嵌入失败（WebView2 环境/controller 创建失败），回退 legacy 路径")
+		}
 		openPanelLegacy(url)
 		return
 	}
