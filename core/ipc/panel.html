@@ -15,7 +15,7 @@
   --accent:#1B1C1A;--on-accent:#F7F7F5;
   --ok:#5F7A5B;--err:#A85A4C;
   --ok-tint:rgba(95,122,91,.13);--out-tint:rgba(27,28,26,.07);
-  --fill-1:rgba(27,28,26,.05);--fill-2:rgba(27,28,26,.09);--seg-thumb:#FFFFFF;
+  --fill-1:rgba(27,28,26,.05);--fill-2:rgba(27,28,26,.09);
   --mask:rgba(0,0,0,.35);--shadow:0 12px 36px rgba(0,0,0,.16);
 }
 :root.dark{
@@ -25,7 +25,7 @@
   --accent:#E8E8E6;--on-accent:#16171A;
   --ok:#8FAE8B;--err:#C68F82;
   --ok-tint:rgba(143,174,139,.16);--out-tint:rgba(240,240,238,.10);
-  --fill-1:rgba(255,255,255,.06);--fill-2:rgba(255,255,255,.10);--seg-thumb:#34363B;
+  --fill-1:rgba(255,255,255,.06);--fill-2:rgba(255,255,255,.10);
   --mask:rgba(0,0,0,.55);--shadow:0 16px 44px rgba(0,0,0,.55);
 }
 
@@ -184,11 +184,11 @@ input.codein:focus{border-color:var(--sub)}
 .tclose{border:none;background:rgba(127,127,127,.28);color:inherit;width:22px;height:22px;border-radius:7px;cursor:pointer;font-size:12px;flex:none}
 .tclose:hover{background:rgba(127,127,127,.45)}
 .toast .tbtn{color:inherit;border-color:rgba(127,127,127,.5);background:transparent}
-/* 外观分段选择：iOS 式浮起滑块——选中 = 中性浮起小片，不与亮暗语义打架 */
+/* 外观分段选择：墨色反转胶囊滑块（与导航/主按钮同一选中态语言），全圆角 + 浮起描边，避免矩形填块感 */
 .seg{display:inline-flex;background:var(--fill-1);border:1px solid var(--hairline);border-radius:10px;padding:2px;gap:2px}
-.segbtn{border:0;background:transparent;color:var(--sub);padding:5px 11px;cursor:pointer;display:flex;align-items:center;border-radius:8px;transition:background .15s,color .15s,box-shadow .15s}
+.segbtn{border:0;background:transparent;color:var(--sub);padding:5px 11px;cursor:pointer;display:flex;align-items:center;border-radius:99px;transition:background .15s,color .15s,box-shadow .15s}
 .segbtn:hover{color:var(--txt)}
-.segbtn.on{background:var(--seg-thumb);color:var(--txt);box-shadow:0 0 0 1px var(--hairline),0 1px 3px rgba(0,0,0,.14)}
+.segbtn.on{background:var(--accent);color:var(--on-accent);box-shadow:0 0 0 1px var(--hairline),0 1px 3px rgba(0,0,0,.14)}
 :root.dark .segbtn.on{box-shadow:0 0 0 1px var(--line),0 1px 3px rgba(0,0,0,.4)}
 .segbtn svg{display:block}
 </style>
