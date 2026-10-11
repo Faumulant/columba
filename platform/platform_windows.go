@@ -587,10 +587,11 @@ func appsUseDarkTheme() bool {
 // 三属性做标题栏同色融合，但在 Win11 26200 上会导致任务栏/标题栏图标
 // 消失（白块），故回滚仅保留深色声明。
 func setNativeTitleBar(hwnd unsafe.Pointer, dark bool) {
-	if !dark {
-		return
+	// 显式设 0/1：早return会让深色标题栏永远翻不回浅色（手动主题切换实锤）
+	on := int32(0)
+	if dark {
+		on = 1
 	}
-	on := int32(1)
 	procDwmSetWinAttr.Call(uintptr(hwnd), 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, uintptr(unsafe.Pointer(&on)), 4)
 }
 

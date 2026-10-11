@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 
 	"drop/core/identity"
-	"drop/platform"
 )
 
-// drop panel —— 在独立应用窗口打开管理面板（需要后台正在运行）。
+// drop panel —— 请求后台 daemon 打开管理面板。面板归 daemon 所有，
+// 本命令发完请求即退；后台未运行时给出指引。
 func cmdPanel() error {
 	raw, err := os.ReadFile(filepath.Join(identity.AppDir(), "ipc.json"))
 	if err != nil {
@@ -24,6 +25,13 @@ func cmdPanel() error {
 	if err := json.Unmarshal(raw, &info); err != nil || info.Port == 0 {
 		return errors.New("后台信息无效：重启 drop run")
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/panel?t=%s", info.Port, info.Token)
-	return platform.OpenPanelWindow(url)
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/panel/open?t=%s", info.Port, info.Token), "application/json", nil)
+	if err != nil {
+		return errors.New("后台未运行：先启动 drop run，或从托盘打开面板")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("面板打开失败：后台返回 " + resp.Status)
+	}
+	return nil
 }

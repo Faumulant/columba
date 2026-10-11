@@ -692,6 +692,15 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		}
 		platform.SetPanelDark(in.Dark)
 		writeOK(w)
+	case req.URL.Path == "/api/panel/open" && req.Method == http.MethodPost:
+		// 面板归 daemon 所有：CLI/桌面快捷方式只发请求，daemon 自己开窗。
+		// 请求进程退出不再连累面板（快捷方式首开曾因 CLI 进程退出而闪没）。
+		url := fmt.Sprintf("http://127.0.0.1:%d/panel?t=%s", s.port, s.token)
+		if err := platform.OpenPanelWindow(url); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeOK(w)
 	case req.URL.Path == "/api/unlock" && req.Method == http.MethodPost:
 		if err := identity.SetUnlocked(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
