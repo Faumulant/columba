@@ -264,6 +264,10 @@ func OpenPanelWindow(url string) error {
 		defer func() {
 			if r := recover(); r != nil {
 				logPanelCrash(fmt.Sprintf("面板窗口 panic: %v\n%s", r, debug.Stack()))
+				// v3 崩溃也必须给用户一个面板：降级 legacy（其内部还有
+				// 浏览器兜底）。回退必须放在这里——panic 会跳过
+				// panelWindowMain 内部 Embed 失败分支的一切后续。
+				openPanelLegacy(url)
 			}
 		}()
 		runtime.LockOSThread()
@@ -347,6 +351,12 @@ const panelWndClassName = "ColumbaPanelWnd"
 // panelBrowser 嵌入自管窗口的 WebView2 浏览器；窗口过程在
 // WM_SIZE/WM_ACTIVATE/WM_MOVE 时联动（缩放/焦点/弹层跟随）。
 var panelBrowser *edge.Chromium
+
+// 面板库金丝雀：引用 fork 独有常量。构建环境丢失 go.work replace（如
+// GOWORK 泄漏）链接回原版 go-webview2 时，此处直接编译失败——把「静默
+// 用错库、面板运行期即崩」拦死在构建期。与 build.bat 开头的 GOWORK
+// 清理互为双保险。
+var _ = edge.ForkVersion
 
 // panelPinner 固定浏览器对象及其 COM 回调结构：Go 1.27 起 GC 会移动堆对象，
 // 而 WebView2 原生侧持有这些结构的裸指针（库源码注释自述违反 unsafe.Pointer

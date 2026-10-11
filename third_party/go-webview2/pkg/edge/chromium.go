@@ -14,6 +14,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// ForkVersion columba fork 标识：宿主 drop/platform 引用本常量作编译期
+// 金丝雀——构建环境丢失 go.work replace（如 GOWORK 泄漏）链接回原版库
+// 时，此处直接编译失败，把「面板即崩」拦死在构建期而不是运行期。
+const ForkVersion = "columba-fork-1"
+
 type Chromium struct {
 	hwnd                  uintptr
 	focusOnInit           bool
