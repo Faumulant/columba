@@ -388,7 +388,12 @@ private fun BottomItem(
     icon: @Composable (Boolean) -> Unit,
 ) {
     Column(
-        modifier.clickable(onClick = onClick),
+        // 无涟漪：默认矩形涟漪在暗色下泛白成「白方块」，信封动画+变色已是反馈
+        modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick,
+        ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         icon(selected)
