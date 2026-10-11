@@ -289,6 +289,15 @@ func logPanelCrash(msg string) {
 	fmt.Fprintln(f, time.Now().Format("01-02 15:04:05.000 ")+msg)
 }
 
+// SetPanelDark 面板手动选择深浅色时同步原生标题栏：DWM 深色属性可对活窗口
+// 随时翻转。auto 模式不调用（标题栏在窗口创建时已按系统设定）；legacy 路径
+// 没有 panelHwnd，静默跳过（其标题栏由库自管，跟随系统）。
+func SetPanelDark(on bool) {
+	if panelHwnd != 0 {
+		setNativeTitleBar(unsafe.Pointer(panelHwnd), on)
+	}
+}
+
 // wakeExistingPanel 已有面板窗口时唤醒并聚焦。用 FindWindow 按窗口类名查，
 // 跨进程同样有效——托盘的 daemon 进程与 drop panel CLI 是两个进程，
 // 进程内全局 panelHwnd 防不住跨进程重复打开。

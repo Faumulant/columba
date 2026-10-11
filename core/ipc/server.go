@@ -679,6 +679,16 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		writeOK(w)
+	case req.URL.Path == "/api/theme" && req.Method == http.MethodPost:
+		var in struct {
+			Dark bool `json:"dark"`
+		}
+		if err := json.NewDecoder(io.LimitReader(req.Body, 1<<20)).Decode(&in); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		platform.SetPanelDark(in.Dark)
+		writeOK(w)
 	case req.URL.Path == "/api/unlock" && req.Method == http.MethodPost:
 		if err := identity.SetUnlocked(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
