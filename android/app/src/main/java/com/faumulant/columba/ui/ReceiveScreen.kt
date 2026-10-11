@@ -192,7 +192,12 @@ fun ReceiveScreen(
 @Composable
 private fun CategoryTab(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(
-        modifier.clickable(onClick = onClick).padding(vertical = 10.dp),
+        // 无涟漪：选中态已有短下划线 + 字重/颜色反馈（与底栏标签同一处理）
+        modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick,
+        ).padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
