@@ -140,9 +140,13 @@ type state struct {
 	discAuto   bool // 发现是否由 StartReceiver 自动拉起（StopReceiver 连带停止）
 
 	pending *pairPending
+
+	probeNow chan struct{} // 立即探测信号（点信标等场景）；缓冲 1，连发合并
 }
 
-func newState() *state { return &state{devices: map[string]*deviceCtx{}} }
+func newState() *state {
+	return &state{devices: map[string]*deviceCtx{}, probeNow: make(chan struct{}, 1)}
+}
 
 var st = newState()
 
@@ -346,13 +350,17 @@ func StartDiscovery(listener EventListener) error {
 }
 
 // TriggerDiscover 立即广播一轮宣告（点信标「立即重发现」用），不打断
-// 周期循环；发现未启动时为空操作。实际发送在发现协程内完成。
+// 周期循环；发现未启动时为空操作。同时触发一轮在线探测兜底。
 func TriggerDiscover() {
 	st.mu.Lock()
 	d := st.disc
 	st.mu.Unlock()
 	if d != nil {
 		d.AnnounceNow()
+	}
+	select {
+	case st.probeNow <- struct{}{}:
+	default:
 	}
 }
 
@@ -405,6 +413,7 @@ func (st *state) ensureDiscovery(auto bool) error {
 		}
 	}()
 	go st.watchOnline(ctx)
+	go st.probeLoop(ctx)
 	return nil
 }
 
@@ -446,6 +455,58 @@ func sameKeys(a, b map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// probeLoop 在线显示的探测兜底：组播被 AP 过滤（换网常见）时 tracker 永远
+// 空、信标永远离线，而发送路径的子网探测不受影响。tracker 内无新鲜在线
+// 设备时低频探测一轮（复用 transfer.Probe），结果以宣告形态喂回 tracker——
+// 下游比对/通知/信标链路零改动。组播正常的网络里本循环零开销。
+func (st *state) probeLoop(ctx context.Context) {
+	tick := time.NewTicker(20 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			st.probeOnce()
+		case <-st.probeNow:
+			st.probeOnce()
+		}
+	}
+}
+
+func (st *state) probeOnce() {
+	st.mu.Lock()
+	tr := st.tracker
+	st.mu.Unlock()
+	if tr == nil {
+		return
+	}
+	for _, p := range tr.Snapshot() {
+		if time.Since(p.Seen) < 15*time.Second { // 有新鲜在线设备：组播活着，不探测
+			return
+		}
+	}
+	d, err := st.device()
+	if err != nil {
+		return
+	}
+	found, err := transfer.Probe(d.id)
+	if err != nil {
+		return
+	}
+	for _, t := range found {
+		host, portStr, err := net.SplitHostPort(t.Addr)
+		if err != nil {
+			continue
+		}
+		port, _ := strconv.Atoi(portStr)
+		tr.Feed(discover.Event{
+			Announce: protocol.Announce{Proto: protocol.Version, ID: t.ID, Name: t.Name, Port: port},
+			IP:       host,
+		})
+	}
 }
 
 // ─── 设备与配对 ──────────────────────────────────────────────────
