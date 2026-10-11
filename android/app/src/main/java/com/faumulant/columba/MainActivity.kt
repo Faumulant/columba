@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Drafts
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -58,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.faumulant.columba.ui.AppDialog
@@ -355,12 +358,30 @@ private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
                     selected = tab == Tab.SETTINGS,
                     onClick = { onTab(Tab.SETTINGS) },
                 ) { selected ->
-                    Icon(
-                        Icons.Filled.Settings,
-                        contentDescription = "设置",
-                        modifier = Modifier.size(22.dp),
-                        tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    // 齿轮动画：未选中=描边 0°，选中=实心 + 拧 22.5°（半齿距——
+                    // 八齿齿轮中心对称，整 45° 的倍数转完和原图重合，视觉变化会被吃掉）
+                    val gearTurn by animateFloatAsState(
+                        targetValue = if (selected) 22.5f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium,
+                        ),
+                        label = "gear",
                     )
+                    Crossfade(
+                        targetState = selected,
+                        animationSpec = tween(150),
+                        label = "gearGlyph",
+                    ) { sel ->
+                        Icon(
+                            if (sel) Icons.Filled.Settings else Icons.Outlined.Settings,
+                            contentDescription = "设置",
+                            modifier = Modifier
+                                .size(22.dp)
+                                .graphicsLayer { rotationZ = gearTurn },
+                            tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                        )
+                    }
                 }
             }
             // 凸出 FAB：上探 28dp 悬在内容上，按压 ×0.92 弹簧回弹
