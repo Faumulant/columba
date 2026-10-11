@@ -42,7 +42,8 @@ input,textarea{font-family:inherit;color:var(--txt);background:transparent}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 35%,transparent)}50%{box-shadow:0 0 0 5px transparent}}
 
 /* 按钮：主=反转强调实心（深底白/浅底黑），次=发丝描边 */
-.btn{font-size:12px;padding:5px 11px;border-radius:8px;border:1px solid var(--line-2);background:transparent;cursor:pointer;color:var(--txt);transition:border-color .15s,background .15s,opacity .15s,color .15s}
+.btn{font-size:12px;padding:5px 11px;border-radius:8px;border:1px solid var(--line-2);background:transparent;cursor:pointer;color:var(--txt);white-space:nowrap;transition:border-color .15s,background .15s,opacity .15s,color .15s}
+.btn:disabled{opacity:.55;cursor:default}
 .btn:hover{border-color:var(--sub)}
 .btn.pri{background:var(--accent);border-color:transparent;color:var(--on-accent);font-weight:600}
 .btn.pri:hover{opacity:.85}
@@ -82,11 +83,11 @@ input,textarea{font-family:inherit;color:var(--txt);background:transparent}
 
 /* ===== 列表页 ===== */
 .head{padding:18px 26px 10px;display:flex;align-items:center;gap:12px}
-.head h1{font-size:19px;font-weight:700}
-.head .count{font-size:12px;color:var(--faint)}
+.head h1{font-size:19px;font-weight:700;white-space:nowrap}
+.head .count{font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .head .flex{flex:1}
 .seg{display:flex;background:var(--fill-1);border-radius:9px;padding:3px}
-.seg b{font-size:12px;padding:4px 13px;border-radius:7px;cursor:pointer;color:var(--sub);font-weight:500;transition:background .15s,color .15s}
+.seg b{font-size:12px;padding:4px 13px;border-radius:7px;cursor:pointer;color:var(--sub);font-weight:500;white-space:nowrap;transition:background .15s,color .15s}
 .seg b.on{background:var(--accent);color:var(--on-accent);font-weight:600}
 .list{flex:1;overflow-y:auto;padding:2px 18px 18px}
 .empty{text-align:center;color:var(--faint);font-size:13px;padding:64px 0}
@@ -185,12 +186,12 @@ input.codein:focus{border-color:var(--sub)}
 .tclose:hover{background:rgba(127,127,127,.45)}
 .toast .tbtn{color:inherit;border-color:rgba(127,127,127,.5);background:transparent}
 /* 外观分段选择：墨色反转胶囊滑块（与导航/主按钮同一选中态语言），全圆角 + 浮起描边，避免矩形填块感 */
-.seg{display:inline-flex;margin-left:auto;background:var(--fill-1);border:1px solid var(--hairline);border-radius:10px;padding:2px;gap:2px}
-.segbtn{border:0;background:transparent;color:var(--sub);padding:5px 11px;cursor:pointer;display:flex;align-items:center;border-radius:99px;transition:background .15s,color .15s,box-shadow .15s}
-.segbtn:hover{color:var(--txt)}
-.segbtn.on{background:var(--accent);color:var(--on-accent);box-shadow:0 0 0 1px var(--hairline),0 1px 3px rgba(0,0,0,.14)}
-:root.dark .segbtn.on{box-shadow:0 0 0 1px var(--line),0 1px 3px rgba(0,0,0,.4)}
-.segbtn svg{display:block}
+.tpill{display:inline-flex;margin-left:auto;background:var(--fill-1);border:1px solid var(--hairline);border-radius:10px;padding:2px;gap:2px}
+.tpbtn{border:0;background:transparent;color:var(--sub);padding:5px 11px;cursor:pointer;display:flex;align-items:center;border-radius:99px;transition:background .15s,color .15s,box-shadow .15s}
+.tpbtn:hover{color:var(--txt)}
+.tpbtn.on{background:var(--accent);color:var(--on-accent);box-shadow:0 0 0 1px var(--hairline),0 1px 3px rgba(0,0,0,.14)}
+:root.dark .tpbtn.on{box-shadow:0 0 0 1px var(--line),0 1px 3px rgba(0,0,0,.4)}
+.tpbtn svg{display:block}
 </style>
 <script>(function(){try{var m=localStorage.getItem("columba-theme")||"auto";var d=m==="dark"||(m==="auto"&&matchMedia("(prefers-color-scheme: dark)").matches);if(d)document.documentElement.classList.add("dark")}catch(e){}})()</script>
 </head>
@@ -473,10 +474,10 @@ function renderSet(m) {
    <button class="btn" onclick='dropURL("open", S.recv_dir)'>打开</button></div></div>
    <h2>外观</h2>
    <div class="setcard"><div class="setrow"><span class="k">主题</span>
-   <div class="seg">
-    <button class="segbtn ${themeMode()==="light"?"on":""}" title="浅色" onclick="setTheme('light')">${icoSun}</button>
-    <button class="segbtn ${themeMode()==="dark"?"on":""}" title="深色" onclick="setTheme('dark')">${icoMoon}</button>
-    <button class="segbtn ${themeMode()==="auto"?"on":""}" title="跟随系统" onclick="setTheme('auto')">${icoSys}</button>
+   <div class="tpill">
+    <button class="tpbtn ${themeMode()==="light"?"on":""}" title="浅色" onclick="setTheme('light')">${icoSun}</button>
+    <button class="tpbtn ${themeMode()==="dark"?"on":""}" title="深色" onclick="setTheme('dark')">${icoMoon}</button>
+    <button class="tpbtn ${themeMode()==="auto"?"on":""}" title="跟随系统" onclick="setTheme('auto')">${icoSys}</button>
    </div></div></div>
    <h2>设备管理 · ${S.devices.length}/${lim}</h2>
    <div class="setcard">
@@ -566,12 +567,18 @@ document.addEventListener("click", e => {
   if (!document.getElementById("dev").contains(e.target))
     document.getElementById("dev").classList.remove("open");
 });
+let sending = false;
 function sendText() {
   const ta = document.getElementById("ta");
   if (!ta.value.trim()) return toast("先写点内容", {err:true});
+  if (sending) return; // 在途锁：网络延迟下连点不重复发送
+  sending = true;
+  const btn = document.querySelector(".composer .btn.pri");
+  if (btn) { btn.disabled = true; btn.textContent = "发送中…"; }
   j("send-text", {method:"POST", body:JSON.stringify({text:ta.value})})
    .then(r => { if (r.ok) { ta.value = ""; toast("已发送到「" + targetName() + "」") } else toast(r.message || "发送失败", {err:true,sticky:true}) })
-   .catch(() => toast("发送失败", {err:true,sticky:true}));
+   .catch(() => toast("发送失败", {err:true,sticky:true}))
+   .finally(() => { sending = false; if (btn) { btn.disabled = false; btn.textContent = "发送" } });
 }
 let removeId = "", removeName = "";
 function rmDev(id, name) {
