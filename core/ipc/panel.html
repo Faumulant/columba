@@ -552,6 +552,12 @@ function pickDir() {
     else toast(r.message || "未选择文件夹", {err:true,sticky:true});
   }).catch(() => toast("操作失败", {err:true,sticky:true}));
 }
+function setAuto(on) {
+  api("autostart", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({on})})
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(j => { if (!j.ok) throw 0; S.autostart = on; if (view === "set") render() })
+    .catch(() => { toast("自启设置失败，请重试", {err:true,sticky:true}); if (view === "set") render() });
+}
 function doUnlock() {
   j("unlock", {method:"POST"}).then(() => { ui("unlockMask", 0); toast("已解锁，设备数量不再受限"); refresh() })
    .catch(() => toast("解锁失败", {err:true,sticky:true}));
