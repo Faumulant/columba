@@ -440,7 +440,11 @@ private fun DetailDialog(entry: HistoryEntry, onClose: () -> Unit, onSave: () ->
 @Composable
 private fun ReceiveBeacon(modifier: Modifier = Modifier) {
     val active = Bus.devices.any { it.online }
-    val dot = if (active) SuccessColor else MaterialTheme.colorScheme.outline
+    // 静默点用次级文字色：outline 在浅底上近乎隐身（可视度过低），
+    // 次级文字色两模式都「看得见但不吵」；动点保持哑光灰绿
+    val dot = if (active) SuccessColor else MaterialTheme.colorScheme.onSurfaceVariant
+    // 波纹浅色下提一档：0.30 是按暗底调的，浅底偏弱
+    val rippleAlpha = if (isAppDark()) 0.30f else 0.42f
     val t = rememberInfiniteTransition(label = "beacon").animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
@@ -454,7 +458,7 @@ private fun ReceiveBeacon(modifier: Modifier = Modifier) {
                 val p = (t + off) % 1f
                 drawCircle(
                     color = dot,
-                    alpha = 0.30f * (1f - p),
+                    alpha = rippleAlpha * (1f - p),
                     radius = dotR + p * (15.5.dp.toPx() - dotR),
                     style = Stroke(width = 1.2.dp.toPx()),
                 )
