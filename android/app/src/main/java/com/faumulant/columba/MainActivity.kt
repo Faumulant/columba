@@ -358,8 +358,9 @@ private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
                     selected = tab == Tab.SETTINGS,
                     onClick = { onTab(Tab.SETTINGS) },
                 ) { selected ->
-                    // 齿轮动画：未选中=描边 0°，选中=实心 + 拧 22.5°（半齿距——
-                    // 八齿齿轮中心对称，整 45° 的倍数转完和原图重合，视觉变化会被吃掉）
+                    // 齿轮动画：选中拧 22.5°（半齿距——八齿 C8 对称，45° 倍数的
+                    // 旋转落点与原图重合，视觉变化会被吃掉）。两态都用实心字形：
+                    // 描边款 22dp 下笔画过细，与实心信封并排重量失衡（实测反馈）
                     val gearTurn by animateFloatAsState(
                         targetValue = if (selected) 22.5f else 0f,
                         animationSpec = spring(
@@ -368,20 +369,14 @@ private fun BottomBar(tab: Tab, onTab: (Tab) -> Unit, onFab: () -> Unit) {
                         ),
                         label = "gear",
                     )
-                    Crossfade(
-                        targetState = selected,
-                        animationSpec = tween(150),
-                        label = "gearGlyph",
-                    ) { sel ->
-                        Icon(
-                            if (sel) Icons.Filled.Settings else Icons.Outlined.Settings,
-                            contentDescription = "设置",
-                            modifier = Modifier
-                                .size(22.dp)
-                                .graphicsLayer { rotationZ = gearTurn },
-                            tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                        )
-                    }
+                    Icon(
+                        Icons.Filled.Settings,
+                        contentDescription = "设置",
+                        modifier = Modifier
+                            .size(22.dp)
+                            .graphicsLayer { rotationZ = gearTurn },
+                        tint = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    )
                 }
             }
             // 凸出 FAB：上探 28dp 悬在内容上，按压 ×0.92 弹簧回弹
