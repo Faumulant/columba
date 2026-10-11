@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,12 +11,51 @@ import (
 	"sync"
 	"time"
 
+	"drop/core/discover"
 	"drop/core/identity"
+	"drop/core/protocol"
 )
 
 // Probe 子网探测兜底发现（供 devices 在线状态等组播之外的路径使用）。
+// 探测到的对端会收到一封单播宣告作「引子信」：组播被过滤的网络里，
+// 对端收不到我们的组播宣告，由此得知我们的地址并回以宣告，双向点亮。
 func Probe(id *identity.Identity) ([]Target, error) {
-	return probeSubnet(id, defaultPort)
+	found, err := probeSubnet(id, defaultPort)
+	if err != nil {
+		return nil, err
+	}
+	announceUnicast(id, found)
+	return found, nil
+}
+
+// announceUnicast 把本机宣告逐个单播寄到对端的发现端口。发完即忘：
+// 对端的发现循环本就监听该端口，单播与组播一视同仁。
+func announceUnicast(id *identity.Identity, targets []Target) {
+	b, err := json.Marshal(protocol.Announce{
+		Proto: protocol.Version,
+		ID:    id.ID(),
+		Name:  id.Name,
+		Port:  defaultPort,
+	})
+	if err != nil {
+		return
+	}
+	for _, t := range targets {
+		host, _, err := net.SplitHostPort(t.Addr)
+		if err != nil {
+			continue
+		}
+		ra, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(host, strconv.Itoa(discover.MulticastPort)))
+		if err != nil {
+			continue
+		}
+		c, err := net.DialUDP("udp", nil, ra)
+		if err != nil {
+			continue
+		}
+		c.Write(b)
+		c.Close()
+	}
 }
 
 // probeSubnet 组播不可靠时的兜底发现：扫描本机所在 IPv4 网段的服务端口，
@@ -159,4 +199,13 @@ func udpRoute24s() ([]net.IP, error) {
 		return nil, errors.New("无法确定本机网段（netlink 受限且无可用路由）")
 	}
 	return out, nil
+}
+
+// 注入 discover 的诊断钩子：落 dbg 文件（与 DebugLog 同通道）。
+func init() {
+	discover.Debugf = func(format string, args ...any) {
+		if DebugLog != nil {
+			DebugLog("[discover] "+format, args...)
+		}
+	}
 }

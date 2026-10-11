@@ -173,6 +173,9 @@ func cmdRun(args []string) error {
 		},
 	})
 	s.SetReceiver(recv)
+	// 接收器共用 daemon 的发现实例：宣告与在线跟踪同一 socket
+	//（双实例时单播宣告只投递给最后绑定者，UI 跟踪实例会饿死）
+	recv.SetAnnouncer(disc)
 	s.NotifyFile = func(dir, peer, name string) {
 		if dir == "send" {
 			platform.Notify(platform.Notif{Title: "Columba", Body: name + " 已发送到 " + peer})

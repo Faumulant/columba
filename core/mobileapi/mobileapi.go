@@ -293,6 +293,18 @@ func StartReceiver(saveDir string, autoSave bool, listener EventListener) error 
 	st.mu.Lock()
 	st.recv, st.recvCancel = recv, cancel
 	st.mu.Unlock()
+
+	// 先建发现实例（与接收器共用同一 socket：宣告 + 在线跟踪一体），
+	// 再启动接收器——双实例时单播宣告只投递给最后绑定者，UI 跟踪实例饿死
+	if err := st.ensureDiscovery(true); err != nil {
+		fmt.Fprintln(os.Stderr, "※ 设备发现不可用（不影响接收与直连发送）:", err)
+	}
+	st.mu.Lock()
+	if st.disc != nil {
+		recv.SetAnnouncer(st.disc)
+	}
+	st.mu.Unlock()
+
 	go func() {
 		if err := recv.Run(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, "mobileapi: 接收端异常退出:", err)
@@ -304,10 +316,6 @@ func StartReceiver(saveDir string, autoSave bool, listener EventListener) error 
 		}
 	}()
 
-	// 发现监听（宣告由 Receiver.Run 内部完成）：供设备在线状态使用
-	if err := st.ensureDiscovery(true); err != nil {
-		fmt.Fprintln(os.Stderr, "※ 设备发现不可用（不影响接收与直连发送）:", err)
-	}
 	return nil
 }
 
@@ -404,12 +412,33 @@ func (st *state) ensureDiscovery(auto bool) error {
 		st.discAuto = true
 	}
 	go func() {
+		defer func() {
+			// pump 死亡 = tracker 永久冻结（信标静止），必须留痕
+			if r := recover(); r != nil && transfer.DebugLog != nil {
+				transfer.DebugLog("宣告泵 panic: %v", r)
+			}
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("宣告泵退出（events 关闭）")
+			}
+		}()
+		if transfer.DebugLog != nil {
+			transfer.DebugLog("宣告泵启动")
+		}
 		for e := range disc.Events() {
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("泵收到事件 ip=%s", e.IP)
+			}
 			tr.Feed(e)
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("feed: %s seen=now ip=%s", protocol.DisplayID(e.Announce.ID), e.IP)
+			}
 			// 对端改名自动同步进信任库（备注名优先，不受影响）
 			if d.trust.RefreshName(e.Announce.ID, e.Announce.Name, e.IP) {
 				st.dispatchChanged()
 			}
+		}
+		if transfer.DebugLog != nil {
+			transfer.DebugLog("宣告泵退出（events 关闭）")
 		}
 	}()
 	go st.watchOnline(ctx)
@@ -443,6 +472,9 @@ func (st *state) watchOnline(ctx context.Context) {
 		}
 		if !sameKeys(cur, last) {
 			last = cur
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("在线集合变化: %d 台", len(cur))
+			}
 			st.dispatchChanged()
 		}
 	}
@@ -985,12 +1017,22 @@ func (st *state) dispatchChanged() {
 	st.mu.Lock()
 	l := st.listener
 	st.mu.Unlock()
+	if transfer.DebugLog != nil {
+		transfer.DebugLog("dispatchChanged: listener=%v", l != nil)
+	}
 	if l == nil {
 		return
 	}
 	go func() {
-		defer recoverPanic("OnDeviceChanged")
+		defer func() {
+			if r := recover(); r != nil && transfer.DebugLog != nil {
+				transfer.DebugLog("OnDeviceChanged panic: %v", r)
+			}
+		}()
 		l.OnDeviceChanged()
+		if transfer.DebugLog != nil {
+			transfer.DebugLog("OnDeviceChanged 回调返回")
+		}
 	}()
 }
 

@@ -90,6 +90,8 @@ type Receiver struct {
 	paired   chan struct{}
 	pairOnce sync.Once
 
+	announcer *discover.Discovery // 外部注入的发现实例：与宿主共用单一 socket（双实例下单播宣告只投递给其一，见 Run）
+
 	pairFailsMu sync.Mutex
 	pairFails   map[string]*pairFail
 }
@@ -146,6 +148,10 @@ func NewReceiver(id *identity.Identity, trust *identity.TrustStore, opt ReceiveO
 	}
 }
 
+// SetAnnouncer 注入宿主的发现实例：接收器不再自建，宣告与宿主 UI 跟踪
+// 共用同一 socket（双实例时单播宣告只投递给其一，热点实测踩坑）。
+func (r *Receiver) SetAnnouncer(d *discover.Discovery) { r.announcer = d }
+
 // StartPairing 生成本次一次性配对码并进入等待状态。
 func (r *Receiver) StartPairing() (string, error) {
 	if r.opt.ConfirmPeer == nil {
@@ -186,11 +192,20 @@ func (r *Receiver) Run(ctx context.Context) error {
 	go func() { errCh <- srv.Serve(tls.NewListener(ln, tlsCfg)) }()
 
 	ann := protocol.Announce{Proto: protocol.Version, ID: r.id.ID(), Name: r.id.Name, Port: r.opt.Port}
-	disc, err := discover.New(r.id.ID())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "※ 设备发现不可用（发送方仍可用 -addr 直连）:", err)
-	} else {
-		defer disc.Close()
+	disc := r.announcer
+	if disc == nil {
+		var err error
+		disc, err = discover.New(r.id.ID())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "※ 设备发现不可用（发送方仍可用 -addr 直连）:", err)
+		} else {
+			defer disc.Close()
+		}
+	}
+	if disc != nil {
+		// 宣告即心跳：组播 + 对已认识对端的单播（见 discover.sendAll）。
+		// 共用宿主实例的原因：双实例时单播宣告只投递给「最后绑定」的
+		// socket——接收器实例收得到，宿主 UI 跟踪实例饿死（热点实测）。
 		disc.StartAnnouncing(ann)
 	}
 	go r.janitor(ctx)

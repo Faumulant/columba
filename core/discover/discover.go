@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,6 +28,10 @@ const (
 	// ≈ 连续丢失 9 次宣告才判离线。
 	ExpireAfter = 20 * time.Second
 )
+
+// Debugf 发现层诊断日志钩子：宿主（transfer）注入，落 dbg 文件。
+// nil 时静默。
+var Debugf func(format string, args ...any)
 
 // Event 收到的一条设备宣告。
 type Event struct {
@@ -47,6 +52,35 @@ type Discovery struct {
 	now    chan struct{} // 触发立即宣告（点信标「立即重发现」）；缓冲 1，连点合并
 	amu    sync.Mutex
 	ann    []byte // 最近一次宣告载荷；AnnounceNow 复用，未宣告时为 nil
+
+	uniMu   sync.Mutex
+	unicast map[string]bool // 组播不可达的对端 IP：宣告循环逐个单播补充（见 sendAll）
+}
+
+// rememberUnicast 记录一个宣告来源地址。组播被 AP/路由器过滤的网络里，
+// 对端收不到我们的组播——此后宣告循环对它逐个单播补充，这是对端得知
+// 我们仍在的唯一途径。宣告即心跳。
+func (d *Discovery) rememberUnicast(ip net.IP) {
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return
+	}
+	d.uniMu.Lock()
+	if d.unicast == nil {
+		d.unicast = map[string]bool{}
+	}
+	d.unicast[ip.String()] = true
+	d.uniMu.Unlock()
+}
+
+// AnnounceUnicast 探测发现新对端时，把其地址记为单播宣告目标（引子信：
+// 对端由此得知我们的地址并回以宣告，双向点亮在线状态）。
+func (d *Discovery) AnnounceUnicast(ip string) {
+	d.uniMu.Lock()
+	if d.unicast == nil {
+		d.unicast = map[string]bool{}
+	}
+	d.unicast[ip] = true
+	d.uniMu.Unlock()
 }
 
 // New 绑定发现端口、加入组播组并开始收包。
@@ -140,12 +174,29 @@ func (d *Discovery) sendAll(b []byte) {
 	if len(d.ifaces) == 0 {
 		// 无已枚举网卡（netlink 受限）：交给内核默认组播接口发送
 		d.pconn.WriteTo(b, nil, d.group)
-		return
+	} else {
+		for _, ifi := range d.ifaces {
+			d.pconn.SetMulticastInterface(ifi)
+			if _, err := d.pconn.WriteTo(b, nil, d.group); err != nil && debug() {
+				fmt.Fprintf(os.Stderr, "[discover] 宣告发送失败 %s: %v\n", ifi.Name, err)
+			}
+		}
 	}
-	for _, ifi := range d.ifaces {
-		d.pconn.SetMulticastInterface(ifi)
-		if _, err := d.pconn.WriteTo(b, nil, d.group); err != nil && debug() {
-			fmt.Fprintf(os.Stderr, "[discover] 宣告发送失败 %s: %v\n", ifi.Name, err)
+	// 单播补充：组播被 AP/路由器过滤的网络（热点常见）里，对已认识
+	// 的对端逐个寄送——宣告即心跳，常开冗余，成本约等于零
+	d.uniMu.Lock()
+	peers := make([]string, 0, len(d.unicast))
+	for a := range d.unicast {
+		peers = append(peers, a)
+	}
+	d.uniMu.Unlock()
+	for _, pa := range peers {
+		ra, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(pa, strconv.Itoa(MulticastPort)))
+		if err != nil {
+			continue
+		}
+		if _, err := d.pconn.WriteTo(b, nil, ra); err != nil && debug() {
+			fmt.Fprintf(os.Stderr, "[discover] 单播宣告失败 %s: %v\n", pa, err)
 		}
 	}
 }
@@ -178,6 +229,10 @@ func (d *Discovery) readLoop(selfID string) {
 		if !ok {
 			continue
 		}
+		if Debugf != nil {
+			Debugf("收到宣告 src=%s id=%s name=%s", ua.IP, protocol.DisplayID(a.ID), a.Name)
+		}
+		d.rememberUnicast(ua.IP)
 		select {
 		case d.events <- Event{Announce: a, IP: ua.IP.String()}:
 		default:
