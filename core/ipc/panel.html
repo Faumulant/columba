@@ -246,11 +246,11 @@ input.codein:focus{border-color:var(--sub)}
 
 <div class="mask" id="delMask" onclick="if(event.target===this)ui('delMask',0)">
   <div class="modal" style="width:320px">
-    <b>删除记录</b>
-    <div style="font-size:13px;color:var(--sub);margin:14px 0 4px">删除选中的 <span id="delN" style="color:var(--err);font-weight:600"></span> 条记录？（只删记录，不删文件）</div>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <button class="btn" style="flex:1;padding:9px" onclick="ui('delMask',0)">取消</button>
-      <button class="btn errb" style="flex:1;padding:9px" onclick="delGo()">删除</button>
+    <b>删除 <span id="delN" style="color:var(--err)"></span> 条记录？</b>
+    <div style="font-size:13px;color:var(--sub);margin:14px 0 0">只删记录，文件本身保留。</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" style="padding:7px 14px" onclick="ui('delMask',0)">取消</button>
+      <button class="btn errb" style="padding:7px 14px" onclick="delGo()">删除</button>
     </div>
   </div>
 </div>
@@ -281,8 +281,10 @@ input.codein:focus{border-color:var(--sub)}
     <div style="border:1.5px dashed var(--line-2);border-radius:12px;padding:18px;margin:12px 0;color:var(--sub);font-size:12.5px">
       <div style="display:flex;gap:12px;justify-content:center"><figure style="margin:0;text-align:center"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZoAAAGaAQAAAAAefbjOAAADDklEQVR4nO2cXYrcOhBGT0WCPMowC7hLkXcwSwpZUnZgL2UWMCA/Dsh898GS253kcgnD9HTcpQe33ehgmS7q5yu5TfzxmL/8OQMOOeSQQw455NA5IWsjwmxmNi4RWMyA1WDpE8ZPWZ5Dt4eyJKkAuYCm9GY2EmQ2BNlIkCTpGrrd8hy6HRTb5zJA/gG2XwoqsMQqFjAI9ebLc+gOoCTZmCqwmGlKb/ZRd3Lor4DyixksEbN/JPtWwMYPuZNDdwn1qJEELMA8APMQKvPzGjUPRQZwVLLu/Jkceg/EMWMkiFx+d+gTsiRNd/5MDr0H2nzE0QGkup+9GfOANQ/yzjs59HdAzUc0LxCkiXYGqSIdfEQrQd1HnBo6RA1NqSKpAknNNnIBqYAmgjxqnB/ao8YaLb98leUfA7AYkMquQoRquQymWy/PoZtDV5nl5iPUAsYEWyoJqU9xH3F6qOcRaiawRY2twlAFLgJ2txe3iFNDu1NQTxJS7RlFCdslW8qZqvuIB4B6HrEYW3MDIpbLipEqRgpiHgGWiOcR54fi8SLVCKnAPLwillg1P68RWE3e6XoMaM8sg1p9WULri5O0n7WA4VHj/FDzEXlaDdKrdc0y1F6C1qh5jGi+9EDv/Jkceg90lVmWpkFtImUuoReeqdUfXmucH9qrz12FuMiV1xWpq9iPAR0kqYNTyLquPvvBLeL80CGz7L955ZJZtillzzvdIs4OXUUNWoTQ1LugWxDZdEy5j3gE6KBHCNbI/Nw2TVnWGg1iNdIravrVbZfn0M2h4/6IS+db5Wp/xDZcxX4IqAWCfWzfTZdGxk8VqVvE2aEtanTxKdQtdGStBikIltVgedoEbO9rPAyU1RTr9oIfoGkxs3FXqObt7a5PWZ5Dn5VHhL3DAZf9EW1m6pHFo8ZDQVkV+6aKvttXtWI0SeSXiI2fvTyHPhqKv3yzPFUBWC5PWNtsaWgegucRDwAdFKpNmtzb312ppPsI73Q9BPRf73S1y24v+047t4izQ6b/n/Pz8H8mc8ghhxxyyCGHAP4F8CGNmwBBh/YAAAAASUVORK5CYII=" alt="支付宝收款码" style="width:118px;height:118px;object-fit:contain;border-radius:8px;background:#fff"><figcaption style="font-size:12px;color:var(--sub);margin-top:5px">支付宝</figcaption></figure><figure style="margin:0;text-align:center"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAcIAAAHCAQAAAABUY/ToAAADy0lEQVR4nO2cX4rjOBCHv1oZ+lGBPUCOIt+gj9TMkeYG9lFygAH5MaDw2wdJjpPeZWBIE6e36iFNJ/pQGYr6p5JN/JnMf/0hCE466aSTTjrppJP7I63JAHCx7YJlqH9tXPqq8SF7OvnNyCRJygDLm5gPF4NlwEaA2cyAIEnSLfkMbZ3cFdm8DMsB0k8wYsGIQRALmo9nU9KlrjMI5YnaOvkSZMoXqx/zAWB5k5m9fW4B7EJbJ/dJBjF3o7ExFjTF8nnZTrR18ulkj2VRwAItqk1gRIBlKKSTIRbYeqPXek4nv5yczczsAEBQrcbSaYCUwUaCbORSy7Lna+vkrsjqh+6yHc3HszEfApqPBYiF5qoesaeT34ukluspAxBUc5+UafX+RFBbty6RJE2v9ZxOfh1JM4kc1JtEvayv5hMlSc0ZSSq4DTl5K82G1IymupvUP5q99LpME3QH9VrP6eTXkb0uI8iSLgaxDMzHMgjKYMSMpdwyJksCe562Tu6RbPnQGrw0RYmkFrdIOah5n2u4cz/k5FZaTr3mOcpryFqNZoqrmUW3ISf/g1yGenjPfNT9uYZ95IuRTm+tSTQ+aE8nvwe59qnLAPHXYCm3tAcoMB9+DepL0Pwe5PmQk7dyjWW1ELvWYMqtTOvxLaimRx7LnLyRa39ok0TXfmJUS6fr+UdNu/H+kJP/SrY5j3VmMUpSPS8LknS2+i+xYONj9nTym5Brba9NT3oTtzYRLON9aid/Q6aTtcmz1A83bLwZrzazPh/7dG2d3Au5nmZ0Z1Q7Rbn/WhtCuZ+cTX7m6uS9rHPSQ6nzZlViGTS/Z/p3FxPLUAwuRpqepa2T+yV7vdVNaJNi11I/COLZmr96yJ5OfheyxzKgDxH1WaG0KfWDPhGv9ZxOfjVpHz3juf6iaXmr3sdqYr1pFz1iTye/GxlLHaqWcpDZsWB2LNQri8RSqzb7yGDj07V1ck/kOgu7dqJj4a4466W+tuKxzMl78mL1IgcE6YcNmB3VG43LACzXqx9P19bJHZHoVtrYdA5qs7CZ1Td1f5XcDzm5kbU/BEAoYhlgfj+bWEIxoiBlZCx/107RE7V1csdk6iOMNkaJdBqwMZ5N09VoYmE7ofaSz+nkF5Db+2Upby8D9YAWbip68HsdTv6GTCfrrx6KZ9OP49qn3nw8eE8nX5oc7r+YD8D8Lqj3hU79DC1NFxPLwfMhJ2/l/r0fArB0GoqlCejvsDJYDhhRfr/MyTtpFX2V1mhkc62+3znbHKl5PuTkVszfce6kk0466aSTTv7PyX8AH/DcQr8wxzkAAAAASUVORK5CYII=" alt="微信收款码" style="width:118px;height:118px;object-fit:contain;border-radius:8px;background:#fff"><figcaption style="font-size:12px;color:var(--sub);margin-top:5px">微信</figcaption></figure></div>
     </div>
-    <button class="btn pri" style="width:100%;padding:10px" onclick="doUnlock()">解锁 3 台设备限制</button>
-    <button class="btn" style="width:100%;padding:9px;margin-top:8px" onclick="ui('unlockMask',0)">关闭</button>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" style="padding:7px 14px" onclick="ui('unlockMask',0)">关闭</button>
+      <button class="btn pri" style="padding:7px 14px" onclick="doUnlock()">解锁 3 台设备限制</button>
+    </div>
   </div>
 </div>
 
@@ -297,12 +299,14 @@ input.codein:focus{border-color:var(--sub)}
   </div>
 </div>
 
-<div class="mask" id="removeMask">
+<div class="mask" id="removeMask" onclick="if(event.target===this)ui('removeMask',0)">
   <div class="modal" style="width:320px">
-    <b>移除设备</b>
-    <div style="font-size:12.5px;color:var(--sub);margin:10px 0 0">移除「<b id="removeName">…</b>」？双方都需要重新配对才能再次传输。</div>
-    <button class="btn" style="width:100%;padding:9px;margin-top:14px" onclick="ui('removeMask',0)">取消</button>
-    <button class="btn errb" style="width:100%;padding:10px;margin-top:8px" onclick="removeConfirm()">移除设备</button>
+    <b>移除「<span id="removeName">…</span>」？</b>
+    <div style="font-size:13px;color:var(--sub);margin:10px 0 0">双方需要重新配对才能再次传输。</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" style="padding:7px 14px" onclick="ui('removeMask',0)">取消</button>
+      <button class="btn errb" style="padding:7px 14px" onclick="removeConfirm()">移除</button>
+    </div>
   </div>
 </div>
 <script>
