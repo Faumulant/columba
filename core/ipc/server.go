@@ -35,6 +35,8 @@ const (
 	// Version 应用版本：/api/state 下发，面板关于卡显示；发版时同步更新
 	Version          = "0.1"
 	ipcPreferredPort = 42709
+	// projectURL 面板关于卡里的项目主页（open 白名单里唯一放行的外部 URL）
+	projectURL = "https://github.com/Faumulant/columba/releases/latest"
 )
 
 // userscriptTemplate 生成给篡改猴的脚本；token/端口在生成时烧入。
@@ -581,29 +583,19 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		writeOK(w)
-	case req.URL.Path == "/api/recvdir" && req.Method == http.MethodPost:
-		var in struct {
-			Dir string `json:"dir"`
-		}
-		json.NewDecoder(req.Body).Decode(&in)
-		dir := strings.TrimSpace(in.Dir)
-		if !filepath.IsAbs(dir) {
-			http.Error(w, "需要绝对路径", http.StatusBadRequest)
-			return
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			http.Error(w, "目录不可创建: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		s.cfgMu.Lock()
-		s.cfg.RecvDir = dir
-		s.saveConfig()
-		s.cfgMu.Unlock()
-		writeOK(w)
 	case (req.URL.Path == "/api/open" || req.URL.Path == "/api/reveal") && req.Method == http.MethodGet:
 		path := req.URL.Query().Get("path")
 		if path == "" {
 			http.Error(w, "缺少 path", http.StatusBadRequest)
+			return
+		}
+		// 白名单：面板只对「历史里的文件」「接收目录」「扩展目录」「项目主页」
+		// 这四类发起 open/reveal。token 会随面板 URL 长期复用（ipc.json 持久），
+		// 一旦泄露，无校验的 open 等于任意路径执行器（ShellExecute 会按扩展名
+		// 拉起关联程序，含 UNC 路径与 .exe）。drop handle 侧早有同款白名单，
+		// 这里补齐同一深度。
+		if err := s.checkOpenable(path); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		var err error
@@ -712,6 +704,71 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// checkOpenable 面板 open/reveal 的路径白名单。放行四类：
+//
+//	① 传输历史里的落盘文件（recv 条目的最终路径；send 条目的来源路径）
+//	② 接收目录本身（设置页「打开」按钮）
+//	③ 扩展目录（Firefox/Chromium 卡片的「打开目录」）
+//	④ 项目主页（关于卡里的 GitHub 链接）
+//
+// 判定用「等于 + 在其之下」而非前缀字符串比较：前缀比较下
+// C:\Users\me\Downloads\DropEvil 会被 C:\Users\me\Downloads\Drop 放行。
+// 相对路径与 UNC（\\host\share）一律拒绝——后者是远程加载可执行文件的入口。
+func (s *Server) checkOpenable(path string) error {
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		// 只放行项目主页这一个 URL，避免变成任意链接跳板
+		if path == projectURL {
+			return nil
+		}
+		return errors.New("只允许打开项目主页")
+	}
+	if !filepath.IsAbs(path) {
+		return errors.New("需要绝对路径")
+	}
+	if strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
+		return errors.New("拒绝网络路径")
+	}
+	clean := filepath.Clean(path)
+
+	// 目录白名单：接收目录 / 两个扩展目录
+	s.cfgMu.Lock()
+	recvDir := s.cfg.RecvDir
+	s.cfgMu.Unlock()
+	for _, root := range []string{recvDir, FirefoxExtDir(), chromiumExtDir()} {
+		if root == "" {
+			continue
+		}
+		if underDir(clean, filepath.Clean(root)) {
+			return nil
+		}
+	}
+	// 历史白名单：与 cmd/drop/cmd_handle.go 的 knownPath 同一口径
+	for _, e := range history.Load() {
+		for _, cand := range []string{e.Path, filepath.Join(e.Path, e.Name)} {
+			if cand == "" || cand == "." {
+				continue
+			}
+			if strings.EqualFold(filepath.Clean(cand), clean) {
+				return nil
+			}
+		}
+	}
+	return errors.New("路径不在允许范围内")
+}
+
+// underDir 判断 p 是否等于 dir 或位于其下（两者都已 Clean）。
+func underDir(p, dir string) bool {
+	if dir == "" || dir == "." {
+		return false
+	}
+	if strings.EqualFold(p, dir) {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(dir)+sep)
+}
+
+// handleState 面板初始状态与轮询数据。
 func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 	s.TouchPanel() // 面板活跃心跳：StartProber 只在面板打开期间工作
 	type dev struct {
