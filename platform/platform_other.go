@@ -56,6 +56,16 @@ func ClearAutostart() error                                  { return nil }
 func AllowFirewall() error                                   { return nil }
 func RemoveFirewall() error                                  { return nil }
 
+// SetPanelDark 面板深浅色：仅 Windows 的原生窗口有标题栏需要跟随，
+// 其余平台是空实现。此前只有 Windows 版本，导致 GOOS=linux 构建 core/ipc 直接
+// 失败（undefined: platform.SetPanelDark），CI 与 macOS 端都会撞上。
+func SetPanelDark(dark bool) {}
+
+// 桌面快捷方式：Windows 专属（.lnk + PowerShell）。其余平台暂不提供，
+// 空实现让 cmd/drop 能跨平台编译；将来做 macOS 时在这里换 .app/别名实现。
+func EnsureDesktopShortcut() error { return nil }
+func RemoveDesktopShortcut()       {}
+
 // RunTray 桩：无托盘，阻塞到 ctx 取消（作为无界面常驻接收端使用）。
 func RunTray(ctx context.Context, tooltip string, items []TrayItem, onQuit func()) error {
 	<-ctx.Done()

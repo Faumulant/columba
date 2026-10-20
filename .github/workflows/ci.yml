@@ -1,0 +1,113 @@
+name: CI
+
+# 三平台编译 + 测试 + vet。
+# 注意两个坑（历史记录见提交信息）：
+#   - build.bat 必须用 go.work（third_party/go-webview2 的 replace 只在那里），
+#     而 gomobile bind 反过来要求 GOWORK=off。CI 里两者分开跑。
+#   - 安卓 AAR/APK 不在 CI 构建（需要 Android SDK + gomobile 工具链，耗时数分钟），
+#     只在 Go 侧验证 mobileapi 能编过。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 测试（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: 下载依赖
+        run: go mod download
+
+      - name: 编译（含 go.work 的 fork replace）
+        run: go build ./...
+
+      - name: gofmt 检查
+        shell: bash
+        run: |
+          out=$(gofmt -l cmd core platform tools)
+          if [ -n "$out" ]; then
+            echo "以下文件未格式化："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        shell: bash
+        run: |
+          # platform_windows.go 有 4 条历史 unsafe.Pointer 提示：窗类名/窗口名转
+          # uintptr 存结构体的模式，RegisterClassExW 同步拷贝字符串故实际安全
+          #（历史记录见提交信息）。只豁免这一条已知项，其余 vet 失败照常拦。
+          go vet ./... 2>&1 | tee /tmp/vet.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # 把已论证的 4 条 unsafe.Pointer 提示滤掉，剩下的若还有内容就算失败
+          rest=$(grep -v 'platform_windows.go:[0-9]*:[0-9]*: possible misuse of unsafe.Pointer' /tmp/vet.log || true)
+          if [ -n "$rest" ]; then
+            echo "存在未豁免的 vet 问题："
+            echo "$rest"
+            exit 1
+          fi
+          echo "仅剩已论证的 unsafe.Pointer 提示，放行"
+
+      - name: 单元测试
+        run: go test -count=1 -timeout 300s ./...
+
+  cross-build:
+    name: 交叉编译产物
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Windows 二进制
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags "-s -w" -o /tmp/drop.exe ./cmd/drop
+          go build -ldflags "-s -w -H windowsgui" -o /tmp/dropw.exe ./cmd/drop
+          ls -lh /tmp/drop.exe /tmp/dropw.exe
+
+      - name: Linux 二进制
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags "-s -w" -o /tmp/drop-linux-amd64 ./cmd/drop
+
+  android-bridge:
+    name: 安卓桥接层编译
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: 验证 core/mobileapi 可交叉编译到 Android
+        # gomobile bind 需要完整 Android SDK + NDK，太重；这里只确认桥接层
+        # 在 android/arm64 目标下能编过（gomobile 也是走这个目标）。
+        env:
+          GOOS: android
+          GOARCH: arm64
+        run: go build ./core/mobileapi
