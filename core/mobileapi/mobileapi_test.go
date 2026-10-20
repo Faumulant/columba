@@ -436,6 +436,46 @@ func TestPairDecideTimeout(t *testing.T) {
 	}
 }
 
+// ── 设备上限：解锁前 3 台、解锁后放开，且与桌面端共用同一份标记 ──
+
+func TestDeviceLimitUnlock(t *testing.T) {
+	dir := t.TempDir()
+	must(t, SetDataDir(dir), "SetDataDir")
+
+	var lim struct {
+		Limit    int  `json:"limit"`
+		Unlocked bool `json:"unlocked"`
+	}
+	read := func() {
+		t.Helper()
+		if err := json.Unmarshal([]byte(DeviceLimitJSON()), &lim); err != nil {
+			t.Fatalf("DeviceLimitJSON 解析失败: %v", err)
+		}
+	}
+
+	read()
+	if lim.Unlocked || lim.Limit != 3 {
+		t.Fatalf("初始应为未解锁且上限 3, got %+v", lim)
+	}
+
+	must(t, UnlockDevices(), "UnlockDevices")
+	read()
+	if !lim.Unlocked {
+		t.Fatal("解锁后 unlocked 应为 true")
+	}
+	if lim.Limit < 1000 {
+		t.Fatalf("解锁后上限应放开, got %d", lim.Limit)
+	}
+
+	// 标记文件落在数据目录（与桌面端 identity.IsUnlocked 同一份），
+	// 换一套数据目录即回到未解锁——两套身份互不影响。
+	must(t, SetDataDir(t.TempDir()), "SetDataDir 第二套")
+	read()
+	if lim.Unlocked {
+		t.Fatal("另一套数据目录不应继承解锁状态")
+	}
+}
+
 // ── 参数校验 ──
 
 func TestParamValidation(t *testing.T) {

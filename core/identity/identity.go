@@ -166,6 +166,11 @@ func IsUnlocked() bool {
 }
 
 func SetUnlocked() error {
+	// 目录可能还不存在：全新数据目录下用户可能先点解锁再配对，
+	// 而 AppDir() 指向的子目录由身份创建时才建（曾直接 WriteFile 失败）。
+	if err := os.MkdirAll(filepath.Dir(unlockedFlag()), 0o700); err != nil {
+		return err
+	}
 	return os.WriteFile(unlockedFlag(), []byte("ok"), 0o600)
 }
 

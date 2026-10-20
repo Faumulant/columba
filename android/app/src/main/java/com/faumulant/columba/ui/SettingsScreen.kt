@@ -68,6 +68,7 @@ fun SettingsScreen() {
     val ctx = LocalContext.current
     var settings by remember { mutableStateOf(AppSettings.load(ctx)) }
     var showAddDevice by remember { mutableStateOf(false) }
+    var showUnlock by remember { mutableStateOf(false) }
     var removeDev by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
     var showRename by remember { mutableStateOf(false) }
     var aliasEdit by remember { mutableStateOf<com.faumulant.columba.Device?>(null) }
@@ -148,6 +149,26 @@ fun SettingsScreen() {
             ) {
                 Icon(Icons.Filled.Add, null, modifier = Modifier.size(14.dp))
                 Text("添加设备", fontSize = 13.sp, modifier = Modifier.padding(start = 7.dp))
+            }
+            // 上限提示与解锁入口：此前手机端硬编码 3 台且无入口，配第 4 台时
+            // 只能收到「可在面板设置中解锁」——而手机上没有那个面板。
+            val lim = Bus.limit
+            if (!lim.unlocked) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "已配对 ${Bus.devices.size}/${lim.limit}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "解除上限",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clickable { showUnlock = true },
+                    )
+                }
             }
         }
 
@@ -352,6 +373,37 @@ fun SettingsScreen() {
             onPaired = {
                 showAddDevice = false
                 Bus.refreshAll()
+            },
+        )
+    }
+
+    if (showUnlock) {
+        AppDialog(
+            onDismiss = { showUnlock = false },
+            title = "解除配对上限",
+            content = {
+                Text(
+                    "非强制付款，直接点击即可。解除后与电脑端共用同一份标记，两端都不再限 3 台。",
+                    fontSize = 13.sp, lineHeight = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            buttons = {
+                DlgButton("取消", "ghost") { showUnlock = false }
+                DlgButton("解除上限", "pri") {
+                    Bus.bg {
+                        val r = Go.unlockDevices()
+                        Bus.onMain {
+                            showUnlock = false
+                            if (r.isSuccess) {
+                                Bus.refreshDevices()
+                                Bus.showSnackbar("已解除，设备数量不再受限")
+                            } else {
+                                Bus.showSnackbar("解除失败：${r.exceptionOrNull()?.message}")
+                            }
+                        }
+                    }
+                }
             },
         )
     }

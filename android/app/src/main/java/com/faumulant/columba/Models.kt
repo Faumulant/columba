@@ -17,6 +17,17 @@ data class SelfInfo(val name: String, val id: String, val displayId: String) {
     }
 }
 
+// 配对设备上限：limit 已按解锁状态解析（解锁后为极大值），unlocked 供 UI 决定
+// 是否显示「解除上限」入口。标记文件与桌面端共用，两端一次解锁。
+data class DeviceLimit(val limit: Int, val unlocked: Boolean) {
+    companion object {
+        fun parse(json: String): DeviceLimit {
+            val o = JSONObject(json)
+            return DeviceLimit(o.optInt("limit", 3), o.optBoolean("unlocked"))
+        }
+    }
+}
+
 data class HistoryEntry(
     val id: String = "",
     val time: String = "",

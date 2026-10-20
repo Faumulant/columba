@@ -357,7 +357,9 @@ func (r *Receiver) handlePair(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if r.opt.MaxDevices != nil && r.trust.Count() >= r.opt.MaxDevices() {
-		writeJSON(w, protocol.PairAck{Message: "已达设备配对上限（可在面板设置中解锁）"})
+		// 文案不能指向具体界面：两端都有入口（电脑面板设置页 / 手机设置页设备卡），
+		// 此前写「面板设置」让手机用户找不到地方。
+		writeJSON(w, protocol.PairAck{Message: "已达设备配对上限（可在设置里解除）"})
 		return
 	}
 

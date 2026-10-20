@@ -40,6 +40,8 @@ object Bus : mobileapi.EventListener {
     var history by mutableStateOf<List<HistoryEntry>>(emptyList())
         private set
     var self by mutableStateOf<SelfInfo?>(null)
+    // 配对上限（含解锁状态）：设置页设备卡显示「已配对 N/上限」，未解锁时给出入口
+    var limit by mutableStateOf(DeviceLimit(3, false))
     var pairRequest by mutableStateOf<PairReq?>(null)
         private set
     var snackbar by mutableStateOf<String?>(null)
@@ -101,8 +103,10 @@ object Bus : mobileapi.EventListener {
     fun refreshDevices() {
         bg {
             val ds = Go.listDevices()
+            val lim = Go.deviceLimit()
             main.post {
                 devices = ds
+                limit = lim
                 pushShareShortcuts()
             }
         }

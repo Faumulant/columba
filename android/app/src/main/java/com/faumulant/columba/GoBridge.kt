@@ -78,4 +78,14 @@ object Go {
 
     fun deleteHistory(ids: List<String>): Result<Unit> = call { Mobileapi.deleteHistory(jsonArrayOf(ids)) }
     fun setSaveDir(dir: String): Result<Unit> = call { Mobileapi.setSaveDir(dir) }
+
+    // ─── 设备上限 ──────────────────────────────────────────────
+
+    fun deviceLimit(): DeviceLimit = try {
+        DeviceLimit.parse(Mobileapi.deviceLimitJSON())
+    } catch (e: Throwable) {
+        DeviceLimit(3, false)
+    }
+
+    fun unlockDevices(): Result<Unit> = call { Mobileapi.unlockDevices() }
 }

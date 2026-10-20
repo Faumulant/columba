@@ -282,7 +282,12 @@ func StartReceiver(saveDir string, autoSave bool, listener EventListener) error 
 			return st.saveDir
 		},
 		ConfirmPeer: st.confirmPeer, // 配对裁决走 OnPairRequest/PairDecide
-		MaxDevices:  func() int { return maxPairedDevices },
+		MaxDevices: func() int {
+			if identity.IsUnlocked() {
+				return 1 << 30
+			}
+			return maxPairedDevices
+		},
 		OnReceived: func(peer, name, path string) {
 			st.dispatchTransfer("recv", peer, name, path, fileSize(path), true, "")
 		},
@@ -947,6 +952,28 @@ func DeleteHistory(idsJSON string) error {
 		return nil
 	}
 	return err
+}
+
+// ─── 设备上限解锁 ────────────────────────────────────────────────
+
+// DeviceLimitJSON 当前配对上限与解锁状态：{"limit":3,"unlocked":false}。
+// limit 已按解锁状态解析（解锁后为极大值），宿主直接显示即可。
+func DeviceLimitJSON() string {
+	limit := maxPairedDevices
+	if identity.IsUnlocked() {
+		limit = 1 << 30
+	}
+	b, _ := json.Marshal(struct {
+		Limit    int  `json:"limit"`
+		Unlocked bool `json:"unlocked"`
+	}{Limit: limit, Unlocked: identity.IsUnlocked()})
+	return string(b)
+}
+
+// UnlockDevices 解除配对设备数量上限（写 unlocked.flag，永久生效）。
+// 与桌面端同一份标记文件，故手机与电脑共用一次解锁。
+func UnlockDevices() error {
+	return identity.SetUnlocked()
 }
 
 // ─── 内部工具 ────────────────────────────────────────────────────
