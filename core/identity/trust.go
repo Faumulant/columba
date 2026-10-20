@@ -237,14 +237,19 @@ func (t *TrustStore) saveLocked() {
 		return
 	}
 	// Windows 的 os.Open 不带 FILE_SHARE_DELETE：读者正持有 trust.json 时
-	// rename 报 Access is denied，重试几次即可越过毫秒级的读窗口。
+	// rename 报 Access is denied。与 history 的 writeAtomic 同一处理：退避重试
+	// 到约 4 秒。这里失败代价更高——信任库写不进去等于刚配对的设备立刻被拒。
+	wait := 200 * time.Millisecond
 	for i := 0; ; i++ {
 		if err := os.Rename(tmp.Name(), t.path); err == nil {
 			break
-		} else if i >= 5 {
+		} else if i >= 6 {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(wait)
+		if wait < 1200*time.Millisecond {
+			wait *= 2
+		}
 	}
 	if st, err := os.Stat(t.path); err == nil {
 		t.lastMod = st.ModTime()
