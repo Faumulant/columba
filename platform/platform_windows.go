@@ -155,6 +155,19 @@ func sanitizeFileName(s string) string {
 	if out == "" {
 		out = "device"
 	}
+	// Windows 保留设备名不能作文件名（大小写不敏感，且 con.txt 这类带扩展的
+	// 形式同样非法）：对端自报的显示名撞车时"发送到"快捷方式创建异常。
+	// 加前缀而不是丢弃，保证 Ensure/Remove 两侧同一显示名算出同一 .lnk 路径。
+	stem := out
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "CLOCK$", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		out = "_" + out
+	}
 	return out
 }
 
@@ -466,6 +479,11 @@ func panelWindowMain(url string) {
 
 func registerPanelClass(hinstance uintptr) bool {
 	cls, _ := windows.UTF16PtrFromString(panelWndClassName)
+	// cls 必须活到 RegisterClassExW 之后：中间的 LoadCursorW 是系统调用/GC 点，
+	// 而存进结构体的裸指针不再被 Go 引用，Go 1.27 起堆会移动就成了悬垂指针
+	//（类注册随机失败 → 面板静默降级 legacy 白窗）。pin 由面板关闭时的
+	// panelPinner.Unpin 释放，每次开面板 pin 一次。
+	panelPinner.Pin(unsafe.Pointer(cls))
 	var wc wndClassExW
 	wc.CbSize = uint32(unsafe.Sizeof(wc))
 	wc.LpfnWndProc = windows.NewCallback(panelWndProc)
@@ -649,6 +667,12 @@ func trackPanelSize(hwnd unsafe.Pointer, scale float64) {
 	}
 }
 
+// panelIcons 图标句柄缓存，下标 = WM_SETICON 的 WPARAM（0 小图 / 1 大图）。
+// WM_SETICON 不移交所有权：窗口销毁时系统不会销毁我们创建的 HICON，所以每次
+// 开面板新建两个就是净泄漏 2 个 GDI 对象；而 ico 是编译期内嵌常量、句柄与
+// 具体窗口无关，进程级复用才是正确生命周期。
+var panelIcons [2]uintptr
+
 // setWindowIcon 从内存 ICO 设置窗口的大/小图标（任务栏与标题栏）。
 func setWindowIcon(hwnd unsafe.Pointer, ico []byte) {
 	if len(ico) < 22 {
@@ -656,6 +680,10 @@ func setWindowIcon(hwnd unsafe.Pointer, ico []byte) {
 	}
 	h := windows.HWND(hwnd)
 	for _, size := range []struct{ w, h, flag uintptr }{{16, 16, 0}, {48, 48, 1}} {
+		if cached := panelIcons[size.flag]; cached != 0 {
+			procSendMessageW.Call(uintptr(h), 0x0080 /*WM_SETICON*/, size.flag, cached)
+			continue
+		}
 		off, _, _ := procLookupIconIdFromDirectoryEx.Call(
 			uintptr(unsafe.Pointer(&ico[0])), 1,
 			size.w, size.h, 0)
@@ -672,6 +700,7 @@ func setWindowIcon(hwnd unsafe.Pointer, ico []byte) {
 		if hIcon == 0 { // 成功时 GetLastError 不保证为零，只看句柄
 			continue
 		}
+		panelIcons[size.flag] = hIcon
 		procSendMessageW.Call(uintptr(h), 0x0080 /*WM_SETICON*/, size.flag, hIcon)
 	}
 }
@@ -824,7 +853,14 @@ func RegisterFirefoxExtension(extDir string) (string, error) {
 		warning = "未能自动写入签名豁免策略（本机注册表受限）。请手动：about:config → xpinstall.signatures.required → false"
 	} else {
 		defer pk.Close()
-		if err := pk.SetDWordValue("", 0); err != nil {
+		// Preferences 策略只认每个 pref 子项下的具面值 Value + Status，
+		// 写成匿名默认值 Firefox 会整条忽略（注册表写成功但豁免不生效，
+		// 面板也收不到 warning，因为写入本身没报错）。
+		err = pk.SetDWordValue("Value", 0)
+		if err == nil {
+			err = pk.SetStringValue("Status", "default")
+		}
+		if err != nil {
 			warning = "未能自动写入签名豁免策略。请手动：about:config → xpinstall.signatures.required → false"
 		}
 	}
