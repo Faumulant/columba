@@ -1,7 +1,10 @@
 name: CI
 
-# 三平台编译 + 测试 + vet。
-# 注意两个坑（历史记录见提交信息）：
+# 只跑 Windows：这是本项目当前唯一交付平台。
+# Linux/macOS 端暂不做（等有需求时再开），届时把下面的 runs-on
+# 换成 matrix 并补 platform_other.go 的实现即可。
+#
+# 两个坑（历史记录见提交信息）：
 #   - build.bat 必须用 go.work（third_party/go-webview2 的 replace 只在那里），
 #     而 gomobile bind 反过来要求 GOWORK=off。CI 里两者分开跑。
 #   - 安卓 AAR/APK 不在 CI 构建（需要 Android SDK + gomobile 工具链，耗时数分钟），
@@ -15,13 +18,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: 测试（${{ matrix.os }}）
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  windows:
+    name: 编译 + 测试（Windows）
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +54,6 @@ jobs:
           go vet ./... 2>&1 | tee /tmp/vet.log
           status=${PIPESTATUS[0]}
           if [ "$status" -eq 0 ]; then exit 0; fi
-          # 把已论证的 4 条 unsafe.Pointer 提示滤掉，剩下的若还有内容就算失败
           rest=$(grep -v 'platform_windows.go:[0-9]*:[0-9]*: possible misuse of unsafe.Pointer' /tmp/vet.log || true)
           if [ -n "$rest" ]; then
             echo "存在未豁免的 vet 问题："
@@ -65,42 +63,28 @@ jobs:
           echo "仅剩已论证的 unsafe.Pointer 提示，放行"
 
       - name: 单元测试
-        # Linux/macOS 的测试目前是「先跑起来看看」：本项目历史上只在 Windows
-        # 上验证过，部分用例可能隐含 Windows 语义（路径分隔符、文件锁行为）。
-        # 用 continue-on-error 让非 Windows 平台的失败不拦 PR，先收集问题；
-        # Windows 是主力平台，必须全绿。
-        continue-on-error: ${{ matrix.os != 'windows-latest' }}
         run: go test -count=1 -timeout 300s ./...
 
-  cross-build:
-    name: 交叉编译产物
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27'
-          cache: true
-
-      - name: Windows 二进制
-        env:
-          GOOS: windows
-          GOARCH: amd64
+      - name: 构建发布产物
+        shell: bash
         run: |
-          go build -ldflags "-s -w" -o /tmp/drop.exe ./cmd/drop
-          go build -ldflags "-s -w -H windowsgui" -o /tmp/dropw.exe ./cmd/drop
-          ls -lh /tmp/drop.exe /tmp/dropw.exe
+          go build -ldflags "-s -w" -o drop.exe ./cmd/drop
+          go build -ldflags "-s -w -H windowsgui" -o dropw.exe ./cmd/drop
+          ls -lh drop.exe dropw.exe
 
-      - name: Linux 二进制
-        env:
-          GOOS: linux
-          GOARCH: amd64
-        run: go build -ldflags "-s -w" -o /tmp/drop-linux-amd64 ./cmd/drop
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: columba-windows
+          path: |
+            drop.exe
+            dropw.exe
+            extension/
+          retention-days: 14
 
   android-bridge:
     name: 安卓桥接层编译
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
