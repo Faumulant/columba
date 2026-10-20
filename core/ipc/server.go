@@ -698,6 +698,10 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 本机解锁成功后，把状态推给所有已配对设备：用户在任意一端点一次，
+		// 其余设备自动跟随，不必重复点击。推送在后台进行，失败不影响本机结果
+		// （对端离线时下次任一端触发会再推）。
+		go s.pushUnlockToPeers()
 		writeOK(w)
 	default:
 		http.NotFound(w, req)
@@ -766,6 +770,34 @@ func underDir(p, dir string) bool {
 	}
 	sep := string(filepath.Separator)
 	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(dir)+sep)
+}
+
+// pushUnlockToPeers 把「已解除设备数量上限」推给所有已配对设备。
+// 在后台跑，逐个尝试；离线/未启动的设备静默跳过（下次任一端触发会再推）。
+func (s *Server) pushUnlockToPeers() {
+	peers := s.trust.List()
+	if transfer.DebugLog != nil {
+		transfer.DebugLog("推送解锁状态：已配对 %d 台", len(peers))
+	}
+	for _, p := range peers {
+		t, err := s.targetAddr(p.ID)
+		if err != nil {
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("推送解锁：%s 地址解析失败（离线?）: %v", p.DisplayName(), err)
+			}
+			continue // 离线：跳过，不打扰用户
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err = transfer.PushUnlock(ctx, s.id, t)
+		cancel()
+		if err != nil {
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("推送解锁到 %s (%s) 失败: %v", p.DisplayName(), t.Addr, err)
+			}
+		} else if transfer.DebugLog != nil {
+			transfer.DebugLog("推送解锁到 %s (%s) 成功", p.DisplayName(), t.Addr)
+		}
+	}
 }
 
 // handleState 面板初始状态与轮询数据。

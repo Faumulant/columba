@@ -253,6 +253,43 @@ func SendText(ctx context.Context, id *identity.Identity, t Target, text string)
 	return nil
 }
 
+// PushUnlock 把本机「已解除设备数量上限」的状态推给一台已配对设备。
+//
+// 语义：解锁是一次性、不可撤销的用户决定（桌面端点一次即永久生效），所以这里
+// 只推 true，不推 false。对端收到后写自己的 unlocked.flag，用户不必在每台设备
+// 上重复点击。
+//
+// 失败不影响本机解锁结果：对端离线/未启动时静默失败，下次任一端触发同步会再推。
+func PushUnlock(ctx context.Context, id *identity.Identity, t Target) error {
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   id.ClientConfig(t.ID),
+			DialContext:       (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2: false,
+		},
+		Timeout: 10 * time.Second,
+	}
+	body, err := json.Marshal(protocol.UnlockMsg{Proto: protocol.Version, Unlocked: true})
+	if err != nil {
+		return err
+	}
+	u := (&url.URL{Scheme: "https", Host: t.Addr, Path: protocol.PathUnlock}).String()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("无法连接对方: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(errBody(resp))
+	}
+	return nil
+}
+
 // SendOptions 发送选项。SkipSourcePath 为 true 时历史不记录来源路径
 // （面板拖拽发送的文件来自临时目录，记录下来也打不开）。
 type SendOptions struct{ SkipSourcePath bool }

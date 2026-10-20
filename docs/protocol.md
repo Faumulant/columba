@@ -54,6 +54,8 @@
 | `POST /v1/upload?s=&f=` | 文件原始字节流 | 200 继续；4xx/5xx 终止 |
 | `POST /v1/complete` | `CompleteReq`（JSON） | `CompleteAck`：`ok=true` 表示校验通过、已落盘 |
 | `POST /v1/pair` | `PairReq`（JSON） | `PairAck`：`ok=true` 表示对方确认，双方互写信任库 |
+| `POST /v1/text` | `TextMsg`（JSON） | 200 表示已入历史（文本不落盘） |
+| `POST /v1/unlock` | `UnlockMsg`（JSON） | `UnlockAck`：`ok=true` 表示已记录 |
 
 ```json
 Offer     {"proto":1,"session_id":"","sender_id":"…","sender_name":"…",
@@ -62,12 +64,26 @@ Offer     {"proto":1,"session_id":"","sender_id":"…","sender_name":"…",
 OfferAck  {"session_id":"…","message":""}
 CompleteReq {"session_id":"…","file_id":"f0","sha256":"…","bytes":123}
 CompleteAck {"ok":true,"saved_as":"dir/子目录/a.txt","message":""}
+UnlockMsg {"proto":1,"unlocked":true}
+UnlockAck {"ok":true}
 ```
 
 - `files[].path` 恒为 `'/'` 分隔的**相对路径**（多文件/文件夹保留目录结构）。
   服务端必须拒绝绝对路径、`..`、盘符等非法路径。
 - `Content-Length` 必须等于清单中的 `size`；不一致立即失败。
 - 上传端点串行化同一 `file_id`，并发上传同一文件返回 409。
+
+### 4.1 解锁状态同步（`/v1/unlock`）
+
+「设备数量上限」是产品层的一次性解锁（用户点一次即永久生效）。解锁状态通过本端点
+在**已配对设备之间**互通，使「在任意一端点过，其余设备自动跟随」。
+
+- 授权门槛与其余数据端点一致：**只对已配对设备开放**，未配对一律 401。
+  这是硬要求——否则局域网内任意设备都能把上限刷开。
+- 只同步 `unlocked=true`。收到 `false` 不做任何事：解锁是一次性用户决定，
+  不支持远程撤销，避免一台设备误发就把已解锁状态抹掉。
+- 收到 `true` 后接收端写本机解锁标记；已解锁时重复推送幂等，无副作用。
+- 推送失败（对端离线/未启动）不影响本机解锁结果。
 
 ## 5. 完整性与落盘
 

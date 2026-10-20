@@ -18,8 +18,9 @@ data class SelfInfo(val name: String, val id: String, val displayId: String) {
 }
 
 // 配对设备上限：limit 已按解锁状态解析（解锁后为极大值），unlocked 供 UI 决定
-// 是否显示「解除上限」入口。标记文件在各端自己的数据目录（unlocked.flag），
-// 手机与电脑需各自解锁一次——设备是两台独立机器，没有共享存储。
+// 是否显示「解除上限」入口。标记文件在本机数据目录（unlocked.flag），
+// 但解锁状态会经 /v1/unlock 在已配对设备之间同步：在任意一端点过，
+// 其余设备自动跟随（见 core/transfer 的 handleUnlock / PushUnlock）。
 data class DeviceLimit(val limit: Int, val unlocked: Boolean) {
     companion object {
         fun parse(json: String): DeviceLimit {

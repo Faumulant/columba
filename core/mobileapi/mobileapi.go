@@ -288,6 +288,13 @@ func StartReceiver(saveDir string, autoSave bool, listener EventListener) error 
 			}
 			return maxPairedDevices
 		},
+		// 收到已配对设备同步来的解锁状态：本机标记已写好，通知宿主刷新 UI
+		OnUnlocked: func(peer string) {
+			st.dispatchChanged()
+			if transfer.DebugLog != nil {
+				transfer.DebugLog("收到 %s 的解锁状态同步", peer)
+			}
+		},
 		OnReceived: func(peer, name, path string) {
 			st.dispatchTransfer("recv", peer, name, path, fileSize(path), true, "")
 		},
@@ -986,8 +993,35 @@ func DeviceLimitJSON() string {
 
 // UnlockDevices 解除配对设备数量上限（写 unlocked.flag，永久生效）。
 // 与桌面端同一份标记文件，故手机与电脑共用一次解锁。
+// UnlockDevices 解除配对设备数量上限（写 unlocked.flag，永久生效）。
+// 本机写入成功后异步推给所有已配对设备：用户在任意一端点一次，另一端自动跟随
+// （协议见 /v1/unlock，接收端在 transfer.handleUnlock）。
 func UnlockDevices() error {
-	return identity.SetUnlocked()
+	if err := identity.SetUnlocked(); err != nil {
+		return err
+	}
+	go st.pushUnlockToPeers()
+	return nil
+}
+
+// pushUnlockToPeers 把解锁状态推给所有已配对设备；离线设备静默跳过。
+func (st *state) pushUnlockToPeers() {
+	d, err := st.device()
+	if err != nil {
+		return
+	}
+	for _, p := range d.trust.List() {
+		t, err := st.resolveTarget(d, p.ID)
+		if err != nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err = transfer.PushUnlock(ctx, d.id, t)
+		cancel()
+		if err != nil && transfer.DebugLog != nil {
+			transfer.DebugLog("推送解锁状态到 %s 失败: %v", p.DisplayName(), err)
+		}
+	}
 }
 
 // ─── 内部工具 ────────────────────────────────────────────────────

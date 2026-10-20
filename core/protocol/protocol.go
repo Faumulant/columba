@@ -17,6 +17,9 @@ const (
 	PathComplete = "/v1/complete"
 	PathPair     = "/v1/pair"
 	PathText     = "/v1/text"
+	// PathUnlock 解锁状态同步：已配对设备之间互通「设备数量上限已解除」。
+	// 只对已配对设备开放（与其余数据端点同一授权门槛）。
+	PathUnlock = "/v1/unlock"
 )
 
 // Announce 局域网发现宣告（UDP 组播）。
@@ -80,6 +83,18 @@ type PairAck struct {
 type TextMsg struct {
 	Proto int    `json:"proto"`
 	Text  string `json:"text"`
+}
+
+// UnlockMsg 解锁状态同步。已配对设备互报「本机已解除设备数量上限」，
+// 收到即在本机也写解锁标记——用户在一端点过，另一端不再需要重复点击。
+// 只携带布尔状态，不涉及凭据：谁能发这个请求，本身已经是已配对设备。
+type UnlockMsg struct {
+	Proto    int  `json:"proto"`
+	Unlocked bool `json:"unlocked"`
+}
+
+type UnlockAck struct {
+	OK bool `json:"ok"`
 }
 
 // NormalizeID 去掉 ID 的显示分隔符并统一大写。

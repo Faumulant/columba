@@ -41,6 +41,7 @@ const (
 // 时由它决定是否接受；nil 时拒绝一切配对请求。DirFn 非空时动态决定接收
 // 目录（面板可运行中更改）。OnReceived/OnText 用于常驻模式弹通知。
 // MaxDevices 返回设备配对上限（解锁后可返回极大值）。
+// OnUnlocked 非空时，收到已配对设备同步来的解锁状态后回调（宿主据此刷新 UI）。
 // ExitOnPair 仅用于 drop pair 命令：配对完成后退出；常驻模式必须为 false。
 type ReceiveOptions struct {
 	Port        int
@@ -50,6 +51,7 @@ type ReceiveOptions struct {
 	OnReceived  func(peer, name, path string)
 	OnText      func(peer, text string)
 	MaxDevices  func() int
+	OnUnlocked  func(peer string)
 	FreeDisk    func(path string) (uint64, error)
 	ExitOnPair  bool
 }
@@ -244,7 +246,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case protocol.PathPair:
 		r.handlePair(w, req)
 		return
-	case protocol.PathOffer, protocol.PathUpload, protocol.PathComplete, protocol.PathText:
+	case protocol.PathOffer, protocol.PathUpload, protocol.PathComplete, protocol.PathText, protocol.PathUnlock:
 	default:
 		http.NotFound(w, req)
 		return
@@ -269,7 +271,37 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.handleComplete(w, req)
 	case protocol.PathText:
 		r.handleText(w, req)
+	case protocol.PathUnlock:
+		r.handleUnlock(w, req)
 	}
+}
+
+// handleUnlock 接收对端的解锁状态同步。
+//
+// 授权门槛与其余数据端点一致：只有已配对设备能发。收到 unlocked=true 就在
+// 本机也写解锁标记——用户在任意一端点过「解除上限」，其余已配对设备自动跟随。
+// 反向（unlocked=false）不做任何事：解锁是一次性决定，不支持远程撤销，
+// 否则一台设备误发就能把用户花钱解锁的状态抹掉。
+func (r *Receiver) handleUnlock(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var um protocol.UnlockMsg
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4<<10)).Decode(&um); err != nil || um.Proto != protocol.Version {
+		http.Error(w, "请求无效", http.StatusBadRequest)
+		return
+	}
+	if um.Unlocked && !identity.IsUnlocked() {
+		if err := identity.SetUnlocked(); err != nil {
+			http.Error(w, "写入解锁标记失败: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if r.opt.OnUnlocked != nil {
+			r.opt.OnUnlocked(r.peerName(req))
+		}
+	}
+	writeJSON(w, protocol.UnlockAck{OK: true})
 }
 
 // handleText 接收文本内容：不落盘，入历史 + 通知回调。
