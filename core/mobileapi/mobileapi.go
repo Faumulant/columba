@@ -554,11 +554,19 @@ func (st *state) probeOnce() {
 
 // ListDevices 已配对设备列表（JSON）：[{"id","name","online"}]，
 // name 为显示名（备注优先），online 为最近 30 秒内有无宣告。
+// ListDevices 已配对设备列表（JSON 数组）。
+// 读取失败时返回带 error 字段的单个对象，宿主据此提示——直接回 "[]" 会让界面
+// 显示「还没有配对设备」，用户以为数据丢了并重新配对（信任库损坏时尤其危险）。
 func ListDevices() string {
 	d, err := st.device()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mobileapi: ListDevices 失败:", err)
-		return "[]"
+		// 仍返回 JSON 数组（单个带 error 字段的对象）：宿主一律按数组解析，
+		// 换成裸对象会让 JSONArray 直接抛异常
+		b, _ := json.Marshal([]struct {
+			Error string `json:"error"`
+		}{{Error: err.Error()}})
+		return string(b)
 	}
 	st.mu.Lock()
 	tr := st.tracker

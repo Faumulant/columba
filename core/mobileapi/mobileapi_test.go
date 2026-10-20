@@ -187,6 +187,32 @@ func readDevices(t *testing.T) []deviceRow {
 	return devs
 }
 
+// ListDevices 的失败形态：必须能表达「读不出来」，不能伪装成「没有设备」。
+// 空数组会让手机界面显示「还没有配对设备」，用户以为数据丢了并重新配对。
+func TestListDevicesReportsError(t *testing.T) {
+	// 造一个身份文件损坏的数据目录：device() 必然失败
+	dir := t.TempDir()
+	must(t, SetDataDir(dir), "SetDataDir")
+	must(t, os.MkdirAll(filepath.Join(dir, "Drop"), 0o755), "建数据子目录")
+	must(t, os.WriteFile(filepath.Join(dir, "Drop", "identity.json"), []byte("{损坏的"), 0o600), "写坏身份")
+
+	raw := ListDevices()
+	var payload []map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("失败形态应是合法 JSON 数组: %v (%s)", err, raw)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("失败时应返回单个带 error 的对象, got %d 项: %s", len(payload), raw)
+	}
+	msg, _ := payload[0]["error"].(string)
+	if msg == "" {
+		t.Fatalf("失败形态必须带 error 字段: %s", raw)
+	}
+	if raw == "[]" {
+		t.Fatal("失败不得伪装成空列表")
+	}
+}
+
 func parseHistory(t *testing.T, raw string) []history.Entry {
 	t.Helper()
 	var es []history.Entry

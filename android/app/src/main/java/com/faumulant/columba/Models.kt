@@ -92,14 +92,26 @@ data class HistoryEntry(
     }
 }
 
-fun parseDevices(json: String): List<Device> {
-    val arr = JSONArray(json)
-    val out = ArrayList<Device>(arr.length())
-    for (i in 0 until arr.length()) {
-        val o = arr.getJSONObject(i)
-        out.add(Device(o.optString("id"), o.optString("name"), o.optBoolean("online")))
+// 设备列表解析结果：Go 侧读取失败时返回 [{"error":"…"}]（而非空数组），
+// 用来区分「真的没有配对设备」与「信任库读不出来」——后者必须提示用户，
+// 否则界面显示「还没有配对设备」，用户会以为数据丢了并重新配对。
+class DeviceList(val devices: List<Device>, val error: String?) {
+    companion object {
+        fun parse(json: String): DeviceList {
+            val arr = JSONArray(json)
+            // 失败形态是单个带 error 字段的对象
+            if (arr.length() == 1) {
+                val o = arr.getJSONObject(0)
+                if (o.has("error")) return DeviceList(emptyList(), o.optString("error"))
+            }
+            val out = ArrayList<Device>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                out.add(Device(o.optString("id"), o.optString("name"), o.optBoolean("online")))
+            }
+            return DeviceList(out, null)
+        }
     }
-    return out
 }
 
 // Go 端批量参数用 JSON 字符串数组（gomobile 不支持 []string）

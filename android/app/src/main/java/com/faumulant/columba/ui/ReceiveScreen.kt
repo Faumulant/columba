@@ -186,7 +186,14 @@ fun ReceiveScreen(
                 DlgButton("删除", "danger") {
                     toDelete = null
                     val ids = listOf(e.id)
-                    Bus.bg { Go.deleteHistory(ids); Bus.refreshHistory() }
+                    Bus.bg {
+                        val r = Go.deleteHistory(ids)
+                        // 失败必须出声：此前 Result 被丢弃，记录其实还在但用户以为删了
+                        Bus.onMain {
+                            if (r.isFailure) Bus.showSnackbar("删除失败：${r.exceptionOrNull()?.message}")
+                        }
+                        Bus.refreshHistory()
+                    }
                 }
             },
         )

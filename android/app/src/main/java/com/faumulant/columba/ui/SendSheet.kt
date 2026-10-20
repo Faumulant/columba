@@ -145,6 +145,7 @@ fun SendSheet(
                                 stageDir = dir
                                 dir.mkdirs()
                                 val paths = ArrayList<String>(uris.size)
+                                val skipped = ArrayList<String>(uris.size)
                                 for (u in uris) {
                                     val name = sanitizeName(u.displayName(ctx))
                                     var f = java.io.File(dir, name)
@@ -153,15 +154,35 @@ fun SendSheet(
                                         f = java.io.File(dir, "($n) $name")
                                         n++
                                     }
-                                    ctx.contentResolver.openInputStream(u)?.use { input ->
+                                    // 打不开的 URI 必须记下来：此前直接 continue，剩余文件
+                                    // 照发且报成功——多选 3 个只发出 2 个，双方都不知道
+                                    val opened = ctx.contentResolver.openInputStream(u)?.use { input ->
                                         f.outputStream().use { input.copyTo(it) }
-                                    } ?: continue
+                                        true
+                                    } ?: false
+                                    if (!opened) {
+                                        skipped.add(name)
+                                        continue
+                                    }
                                     paths.add(f.absolutePath)
                                 }
-                                val r = Go.sendFiles(target, paths)
-                                ok = r.isSuccess
-                                if (!ok) withContext(Dispatchers.Main) {
-                                    sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                                if (paths.isEmpty()) {
+                                    ok = false
+                                    withContext(Dispatchers.Main) {
+                                        sendError = "文件无法读取：" + skipped.joinToString("、")
+                                    }
+                                } else {
+                                    val r = Go.sendFiles(target, paths)
+                                    ok = r.isSuccess
+                                    if (!ok) withContext(Dispatchers.Main) {
+                                        sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                                    } else if (skipped.isNotEmpty()) {
+                                        // 部分失败要明说，不能让「已发送」掩盖漏发
+                                        withContext(Dispatchers.Main) {
+                                            sendError = "已发送 ${paths.size} 个；" +
+                                                "以下 ${skipped.size} 个无法读取：" + skipped.joinToString("、")
+                                        }
+                                    }
                                 }
                             }
                             if (ok && t.isNotEmpty()) {
@@ -170,7 +191,9 @@ fun SendSheet(
                                 if (!ok) withContext(Dispatchers.Main) { sendError = "发送失败：${r.exceptionOrNull()?.message}" }
                             }
                             withContext(Dispatchers.Main) {
-                                if (ok) {
+                                // 有部分文件没发出时不要关闭面板：sendError 里已写明
+                                // 漏了哪几个，关掉就等于把提示一起关没了
+                                if (ok && sendError == null) {
                                     text = ""
                                     onDismiss()
                                 }

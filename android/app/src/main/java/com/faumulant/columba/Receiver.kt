@@ -54,14 +54,17 @@ object Receiver {
             return r.exceptionOrNull()?.message
         }
         acquireMulticastLock(c)
-        running = true
+        // 同上：running 是 Compose state，而 ensureStarted 只从后台线程调用
+        Bus.onMain { running = true }
         return null
     }
 
     @Synchronized
     fun stop(ctx: Context) {
         if (!running) return
-        running = false
+        // running 是 Compose state，本函数由 onStop（主线程）与后台线程共同调用，
+        // 统一经 Bus.onMain 落写，避免并发写快照丢更新
+        Bus.onMain { running = false }
         Go.stopReceiver()
         releaseMulticastLock()
     }

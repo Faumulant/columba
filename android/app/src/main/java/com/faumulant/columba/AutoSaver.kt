@@ -33,7 +33,9 @@ object AutoSaver {
                     warnSaveFailure(ctx, "接收文件夹不可用，请到设置重新选择接收文件夹")
                 }
             } catch (e: Exception) {
-                Bus.showSnackbar("自动保存失败：${e.message}")
+                // 必须走 warnSaveFailure：常驻模式下 Activity 未组合，snackbar 无人
+                // 消费，用户会以为文件收到了（SAF 授权被回收时这里抛 SecurityException）
+                warnSaveFailure(ctx, e.message ?: "未知错误")
             }
         }
     }

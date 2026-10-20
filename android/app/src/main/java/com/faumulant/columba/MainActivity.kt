@@ -131,8 +131,19 @@ class MainActivity : ComponentActivity() {
         return Bus.SharePayload(text = text, uris = streams, targetId = targetId)
     }
 
+    // 非常驻模式下的「离开即停」：onStop 后延迟执行，onStart 回来就取消。
+    // 原因：onStop 在这些场景同样触发，而它们都可能在传输进行中——
+    // SAF 选择器（OpenDocumentTree/OpenMultipleDocuments）、通知权限弹窗、
+    // 屏幕旋转（未声明 configChanges → 重建）。此前无条件立即 stop，收大文件时
+    // 旋一下屏或点「选择文件」就把对端传输打断，且用户看不到任何提示。
+    private val stopHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val stopReceiverTask = Runnable {
+        if (!AppSettings.load(this).persistent) Receiver.stop(this)
+    }
+
     override fun onStart() {
         super.onStart()
+        stopHandler.removeCallbacks(stopReceiverTask) // 回来了：取消挂起的停止
         Receiver.foregroundActive = true
         val s = AppSettings.load(this)
         if (s.persistent) {
@@ -149,8 +160,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         Receiver.foregroundActive = false
-        val s = AppSettings.load(this)
-        if (!s.persistent) Receiver.stop(this)
+        // 旋转/主题切换等配置变更：Activity 会立刻重建，接收端不该断
+        if (!isChangingConfigurations) stopHandler.postDelayed(stopReceiverTask, 1500)
         super.onStop()
     }
 

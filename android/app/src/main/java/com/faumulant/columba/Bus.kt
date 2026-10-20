@@ -43,6 +43,8 @@ object Bus : mobileapi.EventListener {
     // 配对上限（含解锁状态）：设置页设备卡显示「已配对 N/上限」，未解锁时给出入口
     var limit by mutableStateOf(DeviceLimit(3, false))
     var pairRequest by mutableStateOf<PairReq?>(null)
+    // 配对弹窗的自动收起定时器（与 Go 侧 pairDecisionTimeout 对齐）
+    private var pairTimer: Runnable? = null
         private set
     var snackbar by mutableStateOf<String?>(null)
         private set
@@ -102,12 +104,15 @@ object Bus : mobileapi.EventListener {
 
     fun refreshDevices() {
         bg {
-            val ds = Go.listDevices()
+            val list = Go.listDevices()
             val lim = Go.deviceLimit()
             main.post {
-                devices = ds
+                devices = list.devices
                 limit = lim
                 pushShareShortcuts()
+                // 信任库读不出来必须出声：否则界面显示「还没有配对设备」，
+                // 用户会以为数据丢了并重新配对（旧记录其实还在）
+                list.error?.let { showSnackbar("设备列表读取失败：$it") }
             }
         }
     }
@@ -230,10 +235,20 @@ object Bus : mobileapi.EventListener {
     }
 
     override fun onPairRequest(peerName: String, peerID: String): Boolean {
-        // 返回 false：交给 UI 弹窗（允许/拒绝 → PairDecide），超时视为拒绝
+        // 返回 false：交给 UI 弹窗（允许/拒绝 → PairDecide），超时视为拒绝。
+        // 不会并发到达：Go 侧 confirmPeer 在 pending != nil 时直接返回 false、
+        // 根本不回调，故这里无需处理「已有待裁决请求」的分支。
         main.post {
-            if (pairRequest == null) pairRequest = PairReq(peerName, peerID)
-            else bg { Go.pairDecide(false) } // 已有一个待裁决请求，直接拒绝后来的
+            pairRequest = PairReq(peerName, peerID)
+            // 与 Go 侧 pairDecisionTimeout（3 分钟）对齐：到点弹窗自动收起，
+            // 否则用户对着一个已经失效的弹窗点「允许」，只会静默失败。
+            pairTimer?.let { main.removeCallbacks(it) }
+            val t = Runnable {
+                pairRequest = null
+                showSnackbar("配对请求已超时，请重新发起")
+            }
+            pairTimer = t
+            main.postDelayed(t, 175_000)
         }
         return false
     }
@@ -245,9 +260,18 @@ object Bus : mobileapi.EventListener {
     fun resolvePairRequest(allow: Boolean) {
         val req = pairRequest
         pairRequest = null
+        pairTimer?.let { main.removeCallbacks(it); pairTimer = null }
         bg {
             val r = Go.pairDecide(allow)
-            if (allow && r.isSuccess) main.post { showSnackbar("已允许 ${req?.name} 配对") }
+            // 失败必须出声：超时/已被处理时 Go 侧回「当前没有待裁决的配对请求」，
+            // 此前只对成功路径提示，用户点「允许」看到弹窗消失却什么也没发生
+            main.post {
+                if (r.isSuccess) {
+                    if (allow) showSnackbar("已允许 ${req?.name} 配对")
+                } else {
+                    showSnackbar("配对处理失败：${r.exceptionOrNull()?.message}")
+                }
+            }
         }
     }
 }

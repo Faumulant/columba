@@ -80,7 +80,19 @@ fun SettingsScreen() {
 
     fun update(s: AppSettings) {
         settings = s
-        ctx.saveSettings(s)
+        // 先 load 再只覆盖本页改动的字段：settings 是进入组合时的快照，整条写回会
+        // 用陈旧副本覆盖别处写入（底栏 FAB 打开发送面板改目标时会写 lastTargetId，
+        // 之后拨任一开关就把刚选的目标静默清空）。主题由 Bus.themeMode 单独持久化，
+        // 接收模式相关字段也不在本页改，故这里只搬本页拥有的那几个。
+        val cur = AppSettings.load(ctx)
+        ctx.saveSettings(
+            cur.copy(
+                saveMode = s.saveMode,
+                treeUri = s.treeUri,
+                autoGallery = s.autoGallery,
+                persistent = s.persistent,
+            )
+        )
     }
 
     Column(
@@ -432,7 +444,11 @@ fun SettingsScreen() {
                 DlgButton("移除设备", "danger") {
                     removeDev = null
                     Bus.bg {
-                        Go.removeDevice(d.id)
+                        val r = Go.removeDevice(d.id)
+                        Bus.onMain {
+                            // 失败必须出声：此前 Result 被丢弃，列表没变化，用户重复点
+                            if (r.isFailure) Bus.showSnackbar("移除失败：${r.exceptionOrNull()?.message}")
+                        }
                         Bus.refreshDevices()
                     }
                 }
@@ -447,7 +463,10 @@ fun SettingsScreen() {
             onSave = { alias ->
                 aliasEdit = null
                 Bus.bg {
-                    Go.setAlias(d.id, alias)
+                    val r = Go.setAlias(d.id, alias)
+                    Bus.onMain {
+                        if (r.isFailure) Bus.showSnackbar("改备注失败：${r.exceptionOrNull()?.message}")
+                    }
                     Bus.refreshDevices()
                 }
             },

@@ -49,10 +49,11 @@ object Go {
 
     // ─── 设备与配对 ────────────────────────────────────────────
 
-    fun listDevices(): List<Device> = try {
-        parseDevices(Mobileapi.listDevices())
+    fun listDevices(): DeviceList = try {
+        DeviceList.parse(Mobileapi.listDevices())
     } catch (e: Throwable) {
-        emptyList()
+        // 解析失败同样是「读不出来」，不能伪装成空列表
+        DeviceList(emptyList(), e.message ?: "设备列表读取失败")
     }
 
     fun pairStart(): Result<String> = call { Mobileapi.pairStart() }
