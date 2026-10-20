@@ -16,11 +16,13 @@ package transfer
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -31,6 +33,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -342,10 +345,8 @@ func TestReceiverHappyPath(t *testing.T) {
 		t.Fatalf("落盘内容不符: got %q", got)
 	}
 
-	// 会话结束：内存移除 + .part 暂存目录清理
-	if h.sessionCount() != 0 {
-		t.Fatalf("会话应已从内存移除，剩余 %d 个", h.sessionCount())
-	}
+	// 会话记录不再随最后一个文件删除（补投 complete 要靠它判定幂等，回收
+	// 交给 janitor 超时），但暂存目录必须立刻清干净
 	if _, err := os.Stat(partDir(h.dir, sid)); !os.IsNotExist(err) {
 		t.Fatalf("会话结束后 .part 暂存目录应被清理: %v", err)
 	}
@@ -386,14 +387,8 @@ func TestReceiverHappyPath(t *testing.T) {
 
 // TestReceiverNestedDestinationDirectory 覆盖清单路径带子目录的场景
 // （文件夹发送：sender 的 manifest 会产出 "根目录/子目录/文件" 形态的 Path）。
-//
-// 【疑似 bug，未修，待人工分诊】当前实现 complete 阶段 500：
-// handleComplete 直接 os.Rename 到 filepath.Join(r.dir(), final)，但从不
-// MkdirAll 最终文件路径的父目录（handleUpload 建的是 .part 暂存目录内的
-// 父目录，不是接收目录内的），Windows 上 rename 报 "The system cannot
-// find the path specified"——即凡带子目录的接收一律失败，只留失败历史。
-// 本测试在现状下 skip 并附证据；该 bug 修复后这里自动变成成功路径的
-// 回归钉（子目录落盘 + 历史 Path 含子目录）。
+// 钉死的是落盘前必须为最终路径建父目录：handleUpload 建的是 .part 暂存目录
+// 内的父目录，不是接收目录内的，缺这一步 Windows 上 rename 直接失败。
 func TestReceiverNestedDestinationDirectory(t *testing.T) {
 	h := newRecvHarness(t, nil)
 	h.pairSender()
@@ -408,7 +403,6 @@ func TestReceiverNestedDestinationDirectory(t *testing.T) {
 		t.Fatalf("带子目录的接收在 complete 阶段被拒: status=%d body=%s", status, body)
 	}
 
-	// —— 以下在 bug 修复后生效 ——
 	var ack protocol.CompleteAck
 	must(t, json.Unmarshal(body, &ack), "解析 CompleteAck")
 	if !ack.OK || ack.SavedAs != "docs/report.txt" {
@@ -424,8 +418,8 @@ func TestReceiverNestedDestinationDirectory(t *testing.T) {
 	if e.Status != "ok" || e.Path != filepath.FromSlash("docs/report.txt") || e.Name != "report.txt" {
 		t.Fatalf("历史记录不符（Path 应含子目录的最终文件路径）: %+v", e)
 	}
-	if h.sessionCount() != 0 {
-		t.Fatalf("会话应已移除，剩余 %d 个", h.sessionCount())
+	if _, err := os.Stat(partDir(h.dir, sid)); !os.IsNotExist(err) {
+		t.Fatalf("最后一个文件落盘后 .part 暂存目录应被清理: %v", err)
 	}
 }
 
@@ -530,8 +524,8 @@ func TestReceiverZeroByteFile(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("落盘文件应为 0 字节, got %d 字节", len(got))
 	}
-	if h.sessionCount() != 0 {
-		t.Fatalf("会话应已移除，剩余 %d 个", h.sessionCount())
+	if _, err := os.Stat(partDir(h.dir, sid)); !os.IsNotExist(err) {
+		t.Fatalf("0 字节文件落盘后 .part 暂存目录应被清理: %v", err)
 	}
 	es := h.recvHistory(t)
 	if len(es) != 1 {
@@ -603,85 +597,94 @@ func TestReceiverSHA256Mismatch(t *testing.T) {
 	}
 }
 
-// ─── 5. 并发同名文件：不同会话上传同名文件，冲突改名、双双完整落盘 ───
-
+// ─── 5. 并发同名文件：不同会话同时 complete 同名文件，冲突改名、双双完整落盘 ───
+//
+// 取名（ResolveConflict）与改名（os.Rename）之间不持锁时，两台设备同时发
+// 同名文件会各自判定「这个名字还空着」并选中同一个 final，后落盘的一份静默
+// 覆盖前一份已校验的成品。旧用例串行执行 complete，恰好绕开了这个窗口——
+// bug 因此潜伏至今，所以这里必须真并发地下发两个 complete。
 func TestReceiverConcurrentSameName(t *testing.T) {
+	const rounds = 8 // 单轮撞进窗口的概率有限，多轮把「修复前必失败」压成稳定复现
 	h := newRecvHarness(t, nil)
 	h.pairSender()
 
-	contentA := []byte("会话 A 的照片内容")
-	contentB := []byte("会话 B 的照片内容——内容更长一些以资区分")
-	sidA := mustOffer(t, h, protocol.FileMeta{Path: "photo.jpg", Size: int64(len(contentA))})
-	sidB := mustOffer(t, h, protocol.FileMeta{Path: "photo.jpg", Size: int64(len(contentB))})
+	for round := 0; round < rounds; round++ {
+		base := fmt.Sprintf("photo%d", round)
+		name := base + ".jpg"
+		// 同长度不同内容：两份 SHA 都合法，覆盖后字节数不变，只有内容能暴露
+		contentA := bytes.Repeat([]byte{byte('A' + round), 1, 2, 3}, 32<<10)
+		contentB := bytes.Repeat([]byte{byte('B' + round), 1, 2, 3}, 32<<10)
+		sidA := mustOffer(t, h, protocol.FileMeta{Path: name, Size: int64(len(contentA))})
+		sidB := mustOffer(t, h, protocol.FileMeta{Path: name, Size: int64(len(contentB))})
+		mustUpload(t, h, sidA, "f0", contentA)
+		mustUpload(t, h, sidB, "f0", contentB) // .part 目录按会话隔离，互不干扰
 
-	// 两个会话并发上传（.part 目录按会话隔离，互不干扰）
-	type upResult struct {
-		status int
-		body   string
-		err    error
-	}
-	results := make([]upResult, 2)
-	var wg sync.WaitGroup
-	for i, spec := range []struct {
-		sid  string
-		data []byte
-	}{{sidA, contentA}, {sidB, contentB}} {
-		wg.Add(1)
-		go func(i int, sid string, data []byte) {
-			defer wg.Done()
-			status, body, err := h.postUpload(sid, "f0", data)
-			results[i] = upResult{status, string(body), err}
-		}(i, spec.sid, spec.data)
-	}
-	wg.Wait()
-	for i, r := range results {
-		if r.err != nil || r.status != http.StatusOK {
-			t.Fatalf("会话 %d 的并发上传应成功: %+v", i, r)
+		var wg sync.WaitGroup
+		acks := make([]protocol.CompleteAck, 2)
+		codes := make([]int, 2)
+		start := make(chan struct{})
+		for i, spec := range []struct {
+			sid  string
+			data []byte
+		}{{sidA, contentA}, {sidB, contentB}} {
+			wg.Add(1)
+			go func(i int, sid string, data []byte) {
+				defer wg.Done()
+				<-start
+				status, body, err := h.postComplete(sid, "f0", sha256Hex(data))
+				codes[i] = status
+				if err != nil {
+					t.Errorf("第 %d 轮并发 complete 请求失败: %v", round, err)
+					return
+				}
+				json.Unmarshal(body, &acks[i])
+			}(i, spec.sid, spec.data)
+		}
+		close(start)
+		wg.Wait()
+
+		if codes[0] != http.StatusOK || !acks[0].OK || codes[1] != http.StatusOK || !acks[1].OK {
+			t.Fatalf("第 %d 轮：并发 complete 都应成功 A(%d %+v) B(%d %+v)",
+				round, codes[0], acks[0], codes[1], acks[1])
+		}
+		if acks[0].SavedAs == acks[1].SavedAs {
+			t.Fatalf("第 %d 轮：并发同名 complete 选中了同一个落盘名 %q（互相覆盖）", round, acks[0].SavedAs)
+		}
+		// 落盘按完成先后错开命名：先到者保留原名，后到者改名 (1)
+		gotNames := map[string]bool{acks[0].SavedAs: true, acks[1].SavedAs: true}
+		if !gotNames[name] || !gotNames[base+" (1).jpg"] {
+			t.Fatalf("第 %d 轮：应一份原名一份 (1) 后缀, got %q / %q", round, acks[0].SavedAs, acks[1].SavedAs)
+		}
+
+		// 两个文件都完整保存、互不覆盖
+		for _, want := range [][]byte{contentA, contentB} {
+			kept := false
+			for _, ack := range acks {
+				got, err := os.ReadFile(filepath.Join(h.dir, filepath.FromSlash(ack.SavedAs)))
+				must(t, err, "读取 "+ack.SavedAs)
+				if bytes.Equal(got, want) {
+					kept = true
+					break
+				}
+			}
+			if !kept {
+				t.Fatalf("第 %d 轮：有一份内容被同名覆盖丢失", round)
+			}
 		}
 	}
 
-	// 落盘按完成先后错开命名：先到者保留原名，后到者改名 (1)
-	ackA, statusA := h.complete(t, sidA, "f0", sha256Hex(contentA))
-	ackB, statusB := h.complete(t, sidB, "f0", sha256Hex(contentB))
-	if statusA != http.StatusOK || !ackA.OK || statusB != http.StatusOK || !ackB.OK {
-		t.Fatalf("两次 complete 都应成功: A(%d %+v) B(%d %+v)", statusA, ackA, statusB, ackB)
-	}
-	if ackA.SavedAs != "photo.jpg" {
-		t.Fatalf("先完成者应保留原名 photo.jpg, got %q", ackA.SavedAs)
-	}
-	if ackB.SavedAs != "photo (1).jpg" {
-		t.Fatalf("后完成者应改名 photo (1).jpg, got %q", ackB.SavedAs)
-	}
-
-	// 两个文件都完整保存、互不覆盖
-	for rel, want := range map[string][]byte{
-		ackA.SavedAs: contentA,
-		ackB.SavedAs: contentB,
-	} {
-		got, err := os.ReadFile(filepath.Join(h.dir, filepath.FromSlash(rel)))
-		must(t, err, "读取 "+rel)
-		if !bytes.Equal(got, want) {
-			t.Fatalf("%s 内容不符（可能被同名落盘覆盖）: got %q", rel, got)
-		}
-	}
-	if h.sessionCount() != 0 {
-		t.Fatalf("两个会话都应结束，剩余 %d 个", h.sessionCount())
-	}
-
-	// 历史：两条 ok 记录，Path 各自指向最终落盘文件
+	// 历史：每轮两条 ok 记录，Path 各自指向最终落盘文件
 	es := h.recvHistory(t)
-	if len(es) != 2 {
-		t.Fatalf("历史应恰好 2 条记录, got %d:\n%+v", len(es), es)
+	if len(es) != 2*rounds {
+		t.Fatalf("历史应 %d 条记录, got %d", 2*rounds, len(es))
 	}
-	paths := map[string]bool{}
 	for _, e := range es {
 		if e.Dir != "recv" || e.Status != "ok" {
 			t.Fatalf("历史应为 recv/ok: %+v", e)
 		}
-		paths[e.Path] = true
-	}
-	if !paths["photo.jpg"] || !paths[filepath.FromSlash("photo (1).jpg")] {
-		t.Fatalf("历史缺少两条冲突改名记录: %+v", es)
+		if _, err := os.Stat(filepath.Join(h.dir, e.Path)); err != nil {
+			t.Fatalf("历史 Path 应指向真实存在的落盘文件 %q: %v", e.Path, err)
+		}
 	}
 }
 
@@ -846,5 +849,87 @@ func TestReceiverRejectsUnpairedDevice(t *testing.T) {
 	must(t, err, "构造无证书请求")
 	if _, err := bare.Do(req); err == nil {
 		t.Fatal("无证书客户端应在 TLS 握手层被拒绝")
+	}
+}
+
+// ─── 8. 第 5 项修复的回归钉：complete 响应丢包时只补 complete，绝不重投 upload
+//
+// 一次传输两步（upload 送内容 → complete 落盘）。旧行为：complete 遇瞬时网络错
+// 就整传重试，重投 upload 命中对端 409「已在传输中」（不可重试），于是已经落盘
+// 的文件被报成失败并写失败历史，用户手动重发＝对端双份记录。
+func TestSenderRetriesOnlyCompleteWhenResponseLost(t *testing.T) {
+	h := newRecvHarness(t, nil)
+	h.pairSender()
+
+	content := []byte("complete 的响应丢在半路，不该把已落盘的文件说成失败\n")
+	src := filepath.Join(t.TempDir(), "resume.txt")
+	must(t, os.WriteFile(src, content, 0o644), "准备待发送文件")
+
+	var uploads, completes atomic.Int64
+	dropped := false
+	// 服务端 TLS 与生产（及本文件其余用例）一致：同一张接收端证书。第一次
+	// complete 让服务端照常落盘，再把响应掐掉——真实丢包的等价物。
+	proxy := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case protocol.PathUpload:
+			uploads.Add(1)
+		case protocol.PathComplete:
+			completes.Add(1)
+			if dropped {
+				break
+			}
+			dropped = true
+			h.recv.ServeHTTP(httptest.NewRecorder(), req)
+			if hj, ok := w.(http.Hijacker); ok {
+				if conn, _, err := hj.Hijack(); err == nil {
+					conn.Close()
+					return
+				}
+			}
+			return
+		}
+		h.recv.ServeHTTP(w, req)
+	})
+	srv := httptest.NewUnstartedServer(proxy)
+	srv.Listener = tls.NewListener(srv.Listener, h.recv.id.ServerConfig())
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	_, err := Send(context.Background(), h.sender, Target{
+		Addr: srv.Listener.Addr().String(),
+		ID:   identity.Fingerprint(h.recv.id.Cert()),
+		Name: "测试接收端",
+	}, []string{src})
+	if err != nil {
+		t.Fatalf("内容已送达、只是 complete 丢响应时 Send 应最终成功: %v", err)
+	}
+	if n := uploads.Load(); n != 1 {
+		t.Fatalf("内容已送达后不得重投 upload（对端只会回 409）: got %d 次", n)
+	}
+	if n := completes.Load(); n != 2 {
+		t.Fatalf("应恰好补投一次 complete: got %d 次", n)
+	}
+
+	got, err := os.ReadFile(filepath.Join(h.dir, "resume.txt"))
+	must(t, err, "读取落盘文件")
+	if !bytes.Equal(got, content) {
+		t.Fatalf("落盘内容不符: %q", got)
+	}
+	// 补投的 complete 走幂等回执：既不重复落盘也不重复写历史
+	var recv, send, failed int
+	for _, e := range history.Load() {
+		if e.Status != "ok" {
+			failed++
+			continue
+		}
+		switch e.Dir {
+		case "recv":
+			recv++
+		case "send":
+			send++
+		}
+	}
+	if failed != 0 || recv != 1 || send != 1 {
+		t.Fatalf("一次成功传输应只有 recv/send 各一条 ok 记录: recv=%d send=%d failed=%d", recv, send, failed)
 	}
 }

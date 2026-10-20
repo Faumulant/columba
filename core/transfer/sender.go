@@ -296,10 +296,17 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	fmt.Fprintf(os.Stderr, "开始传输 %d 个文件，共 %s\n", len(items), protocol.HumanBytes(total))
 	var firstErr error
 	for _, it := range items {
-		err := uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
+		uploadedSHA, err := uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
 		if err != nil && IsRetryable(err) && ctx.Err() == nil {
-			time.Sleep(600 * time.Millisecond) // 网络抖动：同一文件整传重试一次
-			err = uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
+			time.Sleep(600 * time.Millisecond) // 网络抖动：同一文件重试一次
+			if uploadedSHA != "" {
+				// 内容已收、只是 complete 这一步没走通：补 complete，绝不重投
+				// upload——重投命中对端 409「已在传输中」（不可重试），会把已经
+				// 落盘的文件报成失败，用户手动重发＝对端双份记录。
+				err = completeOne(ctx, client, t.Addr, ack.SessionID, it, uploadedSHA)
+			} else {
+				_, err = uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
+			}
 		}
 		if err != nil {
 			firstErr = err
@@ -316,10 +323,13 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	return name, nil
 }
 
-func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item, peer string) error {
+// uploadOne 送出一个文件：先传内容，再发 complete 落盘。uploadedSHA 非空表示
+// 内容已送达对端（此时 err 只可能出在 complete 这一步），Send 的重试据此只补
+// complete、不重投内容。
+func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item, peer string) (uploadedSHA string, err error) {
 	f, err := os.Open(it.local)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 
@@ -336,12 +346,12 @@ func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it it
 	}).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, pr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.ContentLength = it.meta.Size
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("传输失败: %w", err)
+		return "", fmt.Errorf("传输失败: %w", err)
 	}
 	// 先读 body（错误详情在其中）再关闭，同时让连接可复用
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
@@ -353,13 +363,20 @@ func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it it
 		} else {
 			msg = resp.Status + ": " + msg
 		}
-		return fmt.Errorf("接收端拒绝: %s", msg)
+		return "", fmt.Errorf("接收端拒绝: %s", msg)
 	}
+	// 内容已进对端的 .part：此后重投这段会被判「已在传输中」
+	sha := hex.EncodeToString(h.Sum(nil))
+	return sha, completeOne(ctx, client, addr, sid, it, sha)
+}
 
+// completeOne 通知对端校验并落盘。sha 由调用方给出：重试时内容已在对端，
+// 不能重读本地文件算哈希（源可能已被改动，那会让对端判校验失败）。
+func completeOne(ctx context.Context, client *http.Client, addr, sid string, it item, sha string) error {
 	cr := protocol.CompleteReq{
 		SessionID: sid,
 		FileID:    it.meta.ID,
-		SHA256:    hex.EncodeToString(h.Sum(nil)),
+		SHA256:    sha,
 		Bytes:     it.meta.Size,
 	}
 	var cack protocol.CompleteAck

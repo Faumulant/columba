@@ -62,6 +62,9 @@ type fileState struct {
 	bytes int64
 	got   bool // 上传完成，等待 complete 校验
 	done  bool // complete 已受理（防并发重复落盘）
+	// saved 为落盘后的最终文件名，非空即本次传输已成功。发送方补投
+	// complete（响应丢包）时靠它返回同一结果而不是 409。
+	saved string
 }
 
 type session struct {
@@ -206,6 +209,7 @@ func (r *Receiver) Run(ctx context.Context) error {
 		// 宣告即心跳：组播 + 对已认识对端的单播（见 discover.sendAll）。
 		// 共用宿主实例的原因：双实例时单播宣告只投递给「最后绑定」的
 		// socket——接收器实例收得到，宿主 UI 跟踪实例饿死（热点实测）。
+		// 宿主（daemon）已经起过宣告循环，这里只会换载荷。
 		disc.StartAnnouncing(ann)
 	}
 	go r.janitor(ctx)
@@ -395,7 +399,18 @@ func (r *Receiver) handleOffer(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.mu.Lock()
-	if len(r.sessions) >= maxSessions {
+	// 上限只数仍在传/仍在等的会话：整批完成的会话只是留下 saved 供补投判定，
+	// 既不占文件句柄也不占暂存目录，等 janitor 按 TTL 收走即可。
+	busy := 0
+	for _, s := range r.sessions {
+		for _, st := range s.files {
+			if !st.done {
+				busy++
+				break
+			}
+		}
+	}
+	if busy >= maxSessions {
 		r.mu.Unlock()
 		http.Error(w, "接收端正忙：并发会话过多，请稍后重试", http.StatusTooManyRequests)
 		return
@@ -558,6 +573,14 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "未知会话或文件", http.StatusNotFound)
 		return
 	}
+	if st.saved != "" {
+		// 补投的 complete：上一次已落盘，只是响应丢在半路。回 409 会让发送方
+		// 把成功的传输报成失败，用户重发就在对端堆出双份记录。
+		saved := st.saved
+		r.mu.Unlock()
+		writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(saved)})
+		return
+	}
 	if !st.got || st.file != nil || st.done {
 		r.mu.Unlock()
 		http.Error(w, "文件尚未传完或已受理", http.StatusConflict)
@@ -572,30 +595,42 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, protocol.CompleteAck{Message: "SHA-256 校验失败，文件已丢弃"})
 		return
 	}
-	final := ResolveConflict(r.dir(), filepath.FromSlash(st.meta.Path))
+	dir := r.dir()
+	// 取名、建目录、改名三步整体持锁：两台设备同时发同名文件（各自独立会话）
+	// 时两边都判定「这个名字还空着」并选中同一个 final，后一次 rename 会静默
+	// 覆盖前一份已校验的成品——同名绝不静默覆盖是这张卡的立身承诺。
+	r.mu.Lock()
+	final := ResolveConflict(dir, filepath.FromSlash(st.meta.Path))
 	// meta.Path 可含子目录（文件夹传输）：落盘前确保目标父目录存在
-	if err := os.MkdirAll(filepath.Dir(filepath.Join(r.dir(), final)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, final)), 0o755); err != nil {
+		r.mu.Unlock()
 		os.Remove(st.part)
 		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "创建目标目录失败: "+err.Error())
 		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := os.Rename(st.part, filepath.Join(r.dir(), final)); err != nil {
+	if err := os.Rename(st.part, filepath.Join(dir, final)); err != nil {
+		r.mu.Unlock()
 		os.Remove(st.part)
 		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "保存文件失败: "+err.Error())
 		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	r.mu.Lock()
-	delete(s.files, cr.FileID)
-	if len(s.files) == 0 {
-		delete(r.sessions, cr.SessionID)
+	st.saved = final
+	idle := true
+	for _, f := range s.files {
+		if !f.done {
+			idle = false
+			break
+		}
 	}
 	r.mu.Unlock()
-	if len(s.files) == 0 {
-		os.RemoveAll(partDir(r.dir(), cr.SessionID)) // 会话结束，清理暂存目录
+	if idle {
+		// 暂存目录空了就立刻回收；会话记录留到 janitor 超时——补投 complete
+		// 的幂等判定要靠它，此处删除就只能回 404，发送方无从得知文件已落盘。
+		os.RemoveAll(partDir(dir, cr.SessionID))
 	}
-	savedPath := filepath.Join(r.dir(), final)
+	savedPath := filepath.Join(dir, final)
 	r.record(r.peerName(req), filepath.Base(final), final, st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
 	if r.opt.OnReceived != nil {
