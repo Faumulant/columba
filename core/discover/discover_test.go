@@ -1,8 +1,9 @@
 package discover
 
-// 发现层的两条硬规矩：①宣告循环全进程只有一条（宿主与接收器共用同一个
+// 发现层的三条硬规矩：①宣告循环全进程只有一条（宿主与接收器共用同一个
 // Discovery，两条循环会互抢 pconn 的连接级组播接口，见 StartAnnouncing）；
-// ②单播邻居名单必须随心跳过期收缩（DHCP 换网后旧 IP 会被别人占用）。
+// ②单播邻居名单必须随心跳过期收缩（DHCP 换网后旧 IP 会被别人占用）；
+// ③对端日志按「设备 + 来源地址」去重，不逐条落盘（宣告每 2 秒一条）。
 // 循环条数用 goroutine 增量观察：不为测试引入发送计数钩子。
 
 import (
@@ -99,5 +100,37 @@ func TestUnicastPeersExpire(t *testing.T) {
 	d.rememberUnicast(stale)
 	if got := d.unicastPeers(time.Now()); len(got) != 2 {
 		t.Fatalf("心跳未超时的邻居应保留, got %v", got)
+	}
+}
+
+func TestLogSeenDedup(t *testing.T) {
+	var lines []string
+	old := Debugf
+	Debugf = func(format string, args ...any) {
+		lines = append(lines, format)
+	}
+	defer func() { Debugf = old }()
+
+	d := &Discovery{}
+	ann := protocol.Announce{Proto: protocol.Version, ID: "AABBCC", Name: "手机", Port: 42707}
+	ip1 := net.ParseIP("192.168.1.20")
+	ip2 := net.ParseIP("192.168.1.21")
+
+	for i := 0; i < 10; i++ { // 同设备同地址连发 10 条宣告（20 秒的量）
+		d.logSeen(ann, ip1)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("同一设备同一地址只应记一次, got %d", len(lines))
+	}
+
+	d.logSeen(ann, ip2) // DHCP 换地址：必须再记一条（排障要看地址变化）
+	if len(lines) != 2 {
+		t.Fatalf("来源地址变化应再记一条, got %d", len(lines))
+	}
+
+	ann2 := protocol.Announce{Proto: protocol.Version, ID: "DDEEFF", Name: "平板", Port: 42707}
+	d.logSeen(ann2, ip1) // 另一台设备：独立去重
+	if len(lines) != 3 {
+		t.Fatalf("不同设备应独立记录, got %d", len(lines))
 	}
 }

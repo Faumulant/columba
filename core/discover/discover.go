@@ -56,6 +56,10 @@ type Discovery struct {
 
 	uniMu   sync.Mutex
 	unicast map[string]time.Time // 最近宣告过我们的对端 IP → 收到时刻（宣告即心跳，超时剪除见 sendAll）
+
+	// seen 对端日志去重表：设备 ID → 最近记录过的来源 IP。只由 readLoop
+	// 单 goroutine 读写，故不加锁（见 logSeen）。
+	seen map[string]string
 }
 
 // rememberUnicast 记录一个宣告来源地址。组播被 AP/路由器过滤的网络里，
@@ -243,15 +247,34 @@ func (d *Discovery) readLoop(selfID string) {
 		if !ok {
 			continue
 		}
-		if Debugf != nil {
-			Debugf("收到宣告 src=%s id=%s name=%s", ua.IP, protocol.DisplayID(a.ID), a.Name)
-		}
+		// 只在「新对端出现 / 来源 IP 变了」时留一条：宣告每 2 秒一条，
+		// 逐条落盘会把 daemon.log 塞满（实测一天 8MB，2MB 轮换下真正的
+		// 传输记录全被冲掉），而排障要看的恰恰是「谁来了、从哪个地址」。
+		d.logSeen(a, ua.IP)
 		d.rememberUnicast(ua.IP)
 		select {
 		case d.events <- Event{Announce: a, IP: ua.IP.String()}:
 		default:
 		}
 	}
+}
+
+// logSeen 记录对端日志去重表：同一设备同一地址只记一次。readLoop 是唯一
+// 调用方（单 goroutine），故 seen 无需加锁。
+func (d *Discovery) logSeen(a protocol.Announce, ip net.IP) {
+	if Debugf == nil {
+		return
+	}
+	id := protocol.NormalizeID(a.ID)
+	addr := ip.String()
+	if d.seen == nil {
+		d.seen = map[string]string{}
+	}
+	if d.seen[id] == addr {
+		return
+	}
+	d.seen[id] = addr
+	Debugf("收到宣告 src=%s id=%s name=%s", addr, protocol.DisplayID(a.ID), a.Name)
 }
 
 func hasIPv4(ifi *net.Interface) bool {
