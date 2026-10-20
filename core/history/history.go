@@ -114,10 +114,38 @@ func DeleteIDs(ids []string) (int, error) {
 		return 0, nil
 	}
 	out := strings.Join(kept, "\n") + "\n"
-	if err := os.WriteFile(path(), []byte(out), 0o600); err != nil {
+	// 原子替换：daemon 可能正在 Append、面板可能正在读，整文件重写会让读者
+	// 撞上半截历史（半截 JSONL 即损坏记录）。跨进程丢更新仍未修，根治要文件锁。
+	if err := writeAtomic(path(), out); err != nil {
 		return 0, err
 	}
 	return removed, nil
+}
+
+// writeAtomic 同目录临时文件 + rename 替换（CreateTemp 建出来就是 0600）。
+// Windows 的 os.Open 不带 FILE_SHARE_DELETE：读者正持有 history.jsonl 时
+// rename 报 Access is denied，重试几次即可越过毫秒级的读窗口（读侧无需改动）。
+func writeAtomic(p, content string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // rename 成功后这里是 ENOENT，幂等
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	for i := 0; ; i++ {
+		if err := os.Rename(tmp.Name(), p); err == nil {
+			return nil
+		} else if i >= 5 {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // Print 打印最近 n 条记录。

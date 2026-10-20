@@ -220,10 +220,34 @@ func (t *TrustStore) saveLocked() {
 	if err := os.MkdirAll(filepath.Dir(t.path), 0o700); err != nil {
 		return
 	}
-	if err := os.WriteFile(t.path, b, 0o600); err == nil {
-		if st, err := os.Stat(t.path); err == nil {
-			t.lastMod = st.ModTime()
-			t.loaded = true
+	// 原子替换：信任库直接整写，写裂时新进程解析失败 → 库为空 → 全部设备
+	// 被拒。同目录临时文件 + rename（CreateTemp 建出来就是 0600），读者只会
+	// 看到旧版或新版。CLI 与 daemon 各持内存视图、后写覆盖先写的丢更新问题
+	// 仍未修，根治要跨平台文件锁。
+	tmp, err := os.CreateTemp(filepath.Dir(t.path), "trust-*.tmp")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name()) // rename 成功后这里是 ENOENT，幂等
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	// Windows 的 os.Open 不带 FILE_SHARE_DELETE：读者正持有 trust.json 时
+	// rename 报 Access is denied，重试几次即可越过毫秒级的读窗口。
+	for i := 0; ; i++ {
+		if err := os.Rename(tmp.Name(), t.path); err == nil {
+			break
+		} else if i >= 5 {
+			return
 		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st, err := os.Stat(t.path); err == nil {
+		t.lastMod = st.ModTime()
+		t.loaded = true
 	}
 }
