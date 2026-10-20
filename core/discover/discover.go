@@ -43,18 +43,19 @@ type Event struct {
 // VPN/虚拟机/多网卡环境下系统默认路由常把组播引向错误网卡，
 // 因此逐网卡加入并逐网卡发送，而不是依赖系统默认选择。
 type Discovery struct {
-	pconn  *ipv4.PacketConn
-	group  *net.UDPAddr
-	ifaces []*net.Interface
-	events chan Event
-	stop   chan struct{}
-	once   sync.Once
-	now    chan struct{} // 触发立即宣告（点信标「立即重发现」）；缓冲 1，连点合并
-	amu    sync.Mutex
-	ann    []byte // 最近一次宣告载荷；AnnounceNow 复用，未宣告时为 nil
+	pconn   *ipv4.PacketConn
+	group   *net.UDPAddr
+	ifaces  []*net.Interface
+	events  chan Event
+	stop    chan struct{}
+	once    sync.Once
+	now     chan struct{} // 触发立即宣告（点信标「立即重发现」）；缓冲 1，连点合并
+	amu     sync.Mutex
+	ann     []byte // 最近一次宣告载荷；宣告循环每轮取它，本机改名实时生效
+	running bool   // 宣告循环已在跑（StartAnnouncing 幂等）
 
 	uniMu   sync.Mutex
-	unicast map[string]bool // 组播不可达的对端 IP：宣告循环逐个单播补充（见 sendAll）
+	unicast map[string]time.Time // 最近宣告过我们的对端 IP → 收到时刻（宣告即心跳，超时剪除见 sendAll）
 }
 
 // rememberUnicast 记录一个宣告来源地址。组播被 AP/路由器过滤的网络里，
@@ -66,21 +67,28 @@ func (d *Discovery) rememberUnicast(ip net.IP) {
 	}
 	d.uniMu.Lock()
 	if d.unicast == nil {
-		d.unicast = map[string]bool{}
+		d.unicast = map[string]time.Time{}
 	}
-	d.unicast[ip.String()] = true
+	d.unicast[ip.String()] = time.Now()
 	d.uniMu.Unlock()
 }
 
-// AnnounceUnicast 探测发现新对端时，把其地址记为单播宣告目标（引子信：
-// 对端由此得知我们的地址并回以宣告，双向点亮在线状态）。
-func (d *Discovery) AnnounceUnicast(ip string) {
+// unicastPeers 取出心跳窗口内的单播邻居，并顺手剪除过期的。DHCP 换网后
+// 旧 IP 可能已被别人占用，名单只增不减既无界增长又每轮对死地址徒劳发包；
+// 对端若仍在，下一个 ExpireAfter 窗口内会重新学回。now 由调用方注入
+// （与 transfer 的 sweepSessions 同套路，免测试等 20 秒）。
+func (d *Discovery) unicastPeers(now time.Time) []string {
 	d.uniMu.Lock()
-	if d.unicast == nil {
-		d.unicast = map[string]bool{}
+	defer d.uniMu.Unlock()
+	out := make([]string, 0, len(d.unicast))
+	for a, seen := range d.unicast {
+		if now.Sub(seen) >= ExpireAfter {
+			delete(d.unicast, a)
+			continue
+		}
+		out = append(out, a)
 	}
-	d.unicast[ip] = true
-	d.uniMu.Unlock()
+	return out
 }
 
 // New 绑定发现端口、加入组播组并开始收包。
@@ -139,17 +147,26 @@ func debug() bool { return os.Getenv("DROP_DEBUG") != "" }
 // Events 返回设备宣告通道，Close 后关闭。
 func (d *Discovery) Events() <-chan Event { return d.events }
 
-// StartAnnouncing 周期性地在每张已加入的网卡上宣告本机身份。
+// StartAnnouncing 设置宣告载荷并确保有且只有一条宣告循环在跑。
+// 宿主（daemon）与接收器会对同一个共享实例各调一次，载荷内容本就相同；
+// 若起两条循环，SetMulticastInterface 的连接级状态会被两条循环互抢
+// （A 拨到 eth0 还没写、B 已拨到 wlan0，那张卡的组播这一轮全丢），
+// 单播名单也会每轮发两遍。
 func (d *Discovery) StartAnnouncing(a protocol.Announce) {
 	b, _ := json.Marshal(a)
 	d.amu.Lock()
 	d.ann = b
+	start := !d.running
+	d.running = true
 	d.amu.Unlock()
+	if !start {
+		return
+	}
 	go func() {
 		tick := time.NewTicker(AnnounceEvery)
 		defer tick.Stop()
 		for {
-			d.sendAll(b)
+			d.sendAll() // 每轮取 d.ann：本机改名后喊出去的就是新名字
 			select {
 			case <-d.stop:
 				return
@@ -170,7 +187,10 @@ func (d *Discovery) AnnounceNow() {
 	}
 }
 
-func (d *Discovery) sendAll(b []byte) {
+func (d *Discovery) sendAll() {
+	d.amu.Lock()
+	b := d.ann
+	d.amu.Unlock()
 	if len(d.ifaces) == 0 {
 		// 无已枚举网卡（netlink 受限）：交给内核默认组播接口发送
 		d.pconn.WriteTo(b, nil, d.group)
@@ -184,13 +204,7 @@ func (d *Discovery) sendAll(b []byte) {
 	}
 	// 单播补充：组播被 AP/路由器过滤的网络（热点常见）里，对已认识
 	// 的对端逐个寄送——宣告即心跳，常开冗余，成本约等于零
-	d.uniMu.Lock()
-	peers := make([]string, 0, len(d.unicast))
-	for a := range d.unicast {
-		peers = append(peers, a)
-	}
-	d.uniMu.Unlock()
-	for _, pa := range peers {
+	for _, pa := range d.unicastPeers(time.Now()) {
 		ra, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(pa, strconv.Itoa(MulticastPort)))
 		if err != nil {
 			continue
