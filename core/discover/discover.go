@@ -53,6 +53,10 @@ type Discovery struct {
 	amu     sync.Mutex
 	ann     []byte // 最近一次宣告载荷；宣告循环每轮取它，本机改名实时生效
 	running bool   // 宣告循环已在跑（StartAnnouncing 幂等）
+	// loopDone 宣告循环退出时关闭（由 Close 经 stop 触发）。仅测试用：
+	// 进程级 goroutine 计数在 go test ./... 并行跑包时会被其他包干扰，
+	// 无法可靠判定「循环已退出」（CI 上实测假失败）。nil 表示尚未启动。
+	loopDone chan struct{}
 
 	uniMu   sync.Mutex
 	unicast map[string]time.Time // 最近宣告过我们的对端 IP → 收到时刻（宣告即心跳，超时剪除见 sendAll）
@@ -162,11 +166,16 @@ func (d *Discovery) StartAnnouncing(a protocol.Announce) {
 	d.ann = b
 	start := !d.running
 	d.running = true
+	if start {
+		d.loopDone = make(chan struct{})
+	}
+	done := d.loopDone
 	d.amu.Unlock()
 	if !start {
 		return
 	}
 	go func() {
+		defer close(done) // 让测试能精确观测「循环已退出」
 		tick := time.NewTicker(AnnounceEvery)
 		defer tick.Stop()
 		for {

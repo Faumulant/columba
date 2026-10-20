@@ -4,12 +4,11 @@ package discover
 // Discovery，两条循环会互抢 pconn 的连接级组播接口，见 StartAnnouncing）；
 // ②单播邻居名单必须随心跳过期收缩（DHCP 换网后旧 IP 会被别人占用）；
 // ③对端日志按「设备 + 来源地址」去重，不逐条落盘（宣告每 2 秒一条）。
-// 循环条数用 goroutine 增量观察：不为测试引入发送计数钩子。
+// 循环起停用 Discovery.loopDone 观测：进程级 goroutine 计数在并行跑包时不可靠。
 
 import (
 	"encoding/json"
 	"net"
-	"runtime"
 	"testing"
 	"time"
 
@@ -28,34 +27,38 @@ func newBound(t *testing.T) *Discovery {
 	return d
 }
 
-// waitGoroutines 轮询直到 NumGoroutine 达到 want 或超时（goroutine 起停
-// 不是瞬时的，固定 sleep 在慢机器上会假失败）。
-func waitGoroutines(want int) (int, bool) {
-	for i := 0; i < 100; i++ {
-		if n := runtime.NumGoroutine(); n == want {
-			return n, true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return runtime.NumGoroutine(), false
-}
+// 注意：此处不再用进程级 goroutine 计数判定循环起停。go test ./... 并行跑
+// 多个包时，同进程里其他包的 goroutine 随时增减，全局计数在 CI 上会假失败
+//（实测「基线 3 / 当前 2」）。改用 Discovery.loopDone 精确观测。
 
 func TestStartAnnouncingIsIdempotent(t *testing.T) {
 	d := newBound(t)
-	// New 只起收包协程；以此为基线，宣告循环必须只加一条
-	base := runtime.NumGoroutine()
 
 	ann := protocol.Announce{Proto: protocol.Version, ID: "peer-a", Name: "旧名字", Port: 42707}
 	d.StartAnnouncing(ann)
-	if _, ok := waitGoroutines(base + 1); !ok {
-		t.Fatalf("StartAnnouncing 后应恰好新增 1 条宣告循环（基线 %d）: 当前 %d", base, runtime.NumGoroutine())
+	// 用 loopDone 判定循环是否在跑，不用进程级 goroutine 计数：
+	// go test ./... 并行跑多个包时，其他包的 goroutine 随时增减，
+	// 全局计数在 CI 上会假失败（实测「基线 3 / 当前 2」）。
+	d.amu.Lock()
+	done1 := d.loopDone
+	d.amu.Unlock()
+	if done1 == nil {
+		t.Fatal("StartAnnouncing 后应有宣告循环")
 	}
 
 	// 宿主与接收器各调一次：第二次只换载荷，绝不能再起循环
 	d.StartAnnouncing(ann)
 	d.StartAnnouncing(ann)
-	if n := runtime.NumGoroutine(); n != base+1 {
-		t.Fatalf("重复 StartAnnouncing 起了第二条循环：基线 %d，当前 %d", base, n)
+	d.amu.Lock()
+	done2 := d.loopDone
+	d.amu.Unlock()
+	if done1 != done2 {
+		t.Fatal("重复 StartAnnouncing 起了第二条循环（loopDone 换了新通道）")
+	}
+	select {
+	case <-done1:
+		t.Fatal("重复 StartAnnouncing 不应让循环退出")
+	default:
 	}
 
 	// 载荷必须是「最近一次」的：改名后宣告要实时喊出新名字
@@ -71,8 +74,12 @@ func TestStartAnnouncingIsIdempotent(t *testing.T) {
 	}
 
 	d.Close()
-	if _, ok := waitGoroutines(base); !ok {
-		t.Fatalf("Close 后宣告循环应退出（基线 %d）: 当前 %d", base, runtime.NumGoroutine())
+	// 精确观测循环退出：loopDone 关闭即代表宣告协程已返回。
+	// 仍保留超时，避免 Close 语义坏掉时测试挂死。
+	select {
+	case <-done1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close 后宣告循环应在 2 秒内退出")
 	}
 }
 
