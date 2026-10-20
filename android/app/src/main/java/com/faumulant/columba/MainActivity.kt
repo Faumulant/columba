@@ -105,6 +105,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // 不 setIntent 则 getIntent() 仍是 onCreate 时那条：Activity 重建后
+        // 会重放陈旧的 SEND intent → 发送面板带旧文件重新弹出 → 重复发送
+        setIntent(intent)
         if (intent.getStringExtra("open") == "receive") Bus.pushOpenReceive()
         parseShare(intent)?.let { Bus.pushShare(it) }
     }

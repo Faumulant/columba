@@ -30,6 +30,11 @@ object Bus : mobileapi.EventListener {
         ioExecutor.execute(block)
     }
 
+    // bg()/gomobile 回调线程里写 Compose state 必须经此切回主线程
+    fun onMain(block: () -> Unit) {
+        main.post(block)
+    }
+
     var devices by mutableStateOf<List<Device>>(emptyList())
         private set
     var history by mutableStateOf<List<HistoryEntry>>(emptyList())

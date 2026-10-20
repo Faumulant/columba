@@ -331,8 +331,12 @@ fun SettingsScreen() {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
-            ctx.persistTreePermission(uri)
-            update(settings.copy(treeUri = uri.toString()))
+            // 拿不到持久授权就不写入 treeUri，否则后台自动保存必然失败
+            if (ctx.persistTreePermission(uri)) {
+                update(settings.copy(treeUri = uri.toString()))
+            } else {
+                Bus.showSnackbar("该目录不支持自动保存，请选择本地文件夹")
+            }
         }
     }
     LaunchedEffect(folderPickRequested) {
@@ -458,12 +462,14 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit) {
                 }
                 Bus.bg {
                     val r = Go.setDeviceName(n)
-                    if (r.isSuccess) {
-                        Bus.refreshAll()
-                        Bus.showSnackbar("本机名已更新：$n")
-                        onDismiss()
-                    } else {
-                        err = r.exceptionOrNull()?.message ?: "改名失败"
+                    Bus.onMain {
+                        if (r.isSuccess) {
+                            Bus.refreshAll()
+                            Bus.showSnackbar("本机名已更新：$n")
+                            onDismiss()
+                        } else {
+                            err = r.exceptionOrNull()?.message ?: "改名失败"
+                        }
                     }
                 }
             }
@@ -558,11 +564,13 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                         Bus.bg {
                             val err = Receiver.ensureStarted(ctx)
                             if (err != null) {
-                                myCodeErr = err
+                                Bus.onMain { myCodeErr = err }
                             } else {
                                 val r = Go.pairStart()
-                                myCodeErr = r.exceptionOrNull()?.message
-                                myCode = r.getOrNull() ?: myCode
+                                Bus.onMain {
+                                    myCodeErr = r.exceptionOrNull()?.message
+                                    myCode = r.getOrNull() ?: myCode
+                                }
                             }
                         }
                     }) {
@@ -601,12 +609,14 @@ private fun AddDeviceDialog(onDismiss: () -> Unit, onPaired: () -> Unit) {
                     // 先确保发现监听在跑（在线状态与目标解析更快命中）
                     Receiver.ensureStarted(ctx)
                     val r = Go.pairJoin(code)
-                    joining = false
-                    if (r.isSuccess) {
-                        joinMsg = null
-                        onPaired()
-                    } else {
-                        joinMsg = r.exceptionOrNull()?.message
+                    Bus.onMain {
+                        joining = false
+                        if (r.isSuccess) {
+                            joinMsg = null
+                            onPaired()
+                        } else {
+                            joinMsg = r.exceptionOrNull()?.message
+                        }
                     }
                 }
             }

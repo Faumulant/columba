@@ -118,7 +118,10 @@ fun fmtTime(iso: String): String = try {
     java.time.format.DateTimeFormatter.ofPattern("HH:mm").format(d)
 } catch (e: Exception) {
     try {
+        // 无偏移的串同样是 UTC 写的（移动进程无 TZ），按本地解析会再差一个时区
         val d = java.time.LocalDateTime.parse(iso.take(19))
+            .atZone(java.time.ZoneOffset.UTC)
+            .withZoneSameInstant(java.time.ZoneId.systemDefault())
         java.time.format.DateTimeFormatter.ofPattern("HH:mm").format(d)
     } catch (e2: Exception) {
         iso.take(16).replace('T', ' ')
@@ -132,6 +135,8 @@ fun fmtTimeFull(iso: String): String = try {
 } catch (e: Exception) {
     try {
         val d = java.time.LocalDateTime.parse(iso.take(19))
+            .atZone(java.time.ZoneOffset.UTC)
+            .withZoneSameInstant(java.time.ZoneId.systemDefault())
         java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(d)
     } catch (e2: Exception) {
         iso

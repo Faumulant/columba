@@ -25,15 +25,24 @@ object AutoSaver {
             try {
                 val cat = HistoryEntry.categoryOfName(name)
                 if (cat == HistoryEntry.Category.IMAGE && s.autoGallery && Build.VERSION.SDK_INT >= 29) {
-                    saveToGallery(ctx, path, name)
+                    if (!saveToGallery(ctx, path, name)) {
+                        warnSaveFailure(ctx, "图片写入相册失败：$name")
+                    }
                 }
-                if (s.treeUri.isNotEmpty()) {
-                    copyToTree(ctx, Uri.parse(s.treeUri), path, name)
+                if (s.treeUri.isNotEmpty() && !copyToTree(ctx, Uri.parse(s.treeUri), path, name)) {
+                    warnSaveFailure(ctx, "接收文件夹不可用，请到设置重新选择接收文件夹")
                 }
             } catch (e: Exception) {
                 Bus.showSnackbar("自动保存失败：${e.message}")
             }
         }
+    }
+
+    // 保存失败提示：非常驻/后台场景 Activity 可能已销毁，snackbar 会丢，
+    // 故前台走 snackbar、其余走系统通知，两条路都保证用户看得见
+    private fun warnSaveFailure(ctx: Context, detail: String) {
+        if (Receiver.foregroundActive()) Bus.showSnackbar("自动保存失败：$detail")
+        else Notifier.notifySaveFailed(ctx, detail)
     }
 
     // MediaStore 入相册（API 29+，无需权限）。
@@ -69,10 +78,11 @@ object AutoSaver {
 
     // SAF tree 拷贝（自动模式的目标文件夹）。
     // 失败时删除已创建的 0 字节/半截文件，避免目标文件夹残留垃圾。
-    fun copyToTree(ctx: Context, treeUri: Uri, path: String, name: String) {
-        val tree = DocumentFile.fromTreeUri(ctx, treeUri) ?: return
-        if (!tree.canWrite()) return
-        val df = tree.createFile(mimeForName(name), name) ?: return
+    // 返回 false（树失效/不可写/拷贝中断）时调用方必须提示，不可静默。
+    fun copyToTree(ctx: Context, treeUri: Uri, path: String, name: String): Boolean {
+        val tree = DocumentFile.fromTreeUri(ctx, treeUri) ?: return false
+        if (!tree.canWrite()) return false
+        val df = tree.createFile(mimeForName(name), name) ?: return false
         val ok = try {
             ctx.contentResolver.openOutputStream(df.uri)?.use { out ->
                 File(path).inputStream().use { it.copyTo(out) }
@@ -81,5 +91,6 @@ object AutoSaver {
             false
         }
         if (!ok) df.delete()
+        return ok
     }
 }

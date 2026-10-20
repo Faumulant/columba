@@ -43,13 +43,18 @@ fun Context.saveSettings(s: AppSettings) {
         .apply()
 }
 
-fun Context.persistTreePermission(uri: Uri) {
-    try {
-        contentResolver.takePersistableUriPermission(
-            uri,
-            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        )
-    } catch (_: SecurityException) {
-    }
+// 返回是否真的拿到了持久授权。SecurityException=uri 不带可持久化标志，
+// IllegalArgumentException=Google Drive 等云盘 provider 根本不支持；
+// 两种都意味着没授权，调用方据此决定要不要写 treeUri。
+fun Context.persistTreePermission(uri: Uri): Boolean = try {
+    contentResolver.takePersistableUriPermission(
+        uri,
+        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    )
+    true
+} catch (_: SecurityException) {
+    false
+} catch (_: IllegalArgumentException) {
+    false
 }

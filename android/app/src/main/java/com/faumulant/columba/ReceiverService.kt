@@ -2,11 +2,12 @@ package com.faumulant.columba
 
 import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
-// 前台服务（dataSync）：常驻模式下宿主 Go 接收端。
+// 前台服务（specialUse）：常驻模式下宿主 Go 接收端。
 // 常驻通知（Android 前台服务硬性要求）：“Columba 正在等待接收”。
 class ReceiverService : Service() {
 
@@ -44,9 +45,16 @@ class ReceiverService : Service() {
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
-        ServiceCompat.startForeground(
-            this, Notifier.ID_STATUS, n,
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        )
+        // specialUse 类型位仅 API 34+ 认识，低版本传类型参数会因与清单解析结果
+        // 不一致被框架校验拒绝，故只在 34+ 显式传类型
+        if (Build.VERSION.SDK_INT >= 34) {
+            ServiceCompat.startForeground(
+                this, Notifier.ID_STATUS, n,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(Notifier.ID_STATUS, n)
+        }
     }
 }

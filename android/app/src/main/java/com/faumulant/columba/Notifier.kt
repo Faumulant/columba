@@ -80,6 +80,24 @@ object Notifier {
         }
     }
 
+    // 自动保存目标失效（接收文件夹被改名/删除、相册写入失败）：历史已显示「收到」，
+    // 文件却没落到用户期望的位置——必须出声，否则用户以为收到了。复用 CH_TRANSFER 渠道。
+    fun notifySaveFailed(ctx: Context, detail: String) {
+        val n: Notification = NotificationCompat.Builder(ctx, CH_TRANSFER)
+            .setSmallIcon(R.drawable.ic_stat_columba)
+            .setContentTitle("自动保存失败")
+            .setContentText(detail)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent(ctx))
+            .build()
+        try {
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(seq++, n)
+        } catch (_: SecurityException) {
+            // 通知权限未授予：忽略
+        }
+    }
+
     fun notifyReceived(ctx: Context, name: String, peer: String, isText: Boolean) {
         if (!AppSettings.load(ctx).persistent) return // 仅常驻模式下走系统通知（前台有 snackbar）
         val title = if (isText) "收到文本" else "收到文件"

@@ -160,12 +160,14 @@ fun SendSheet(
                                 }
                                 val r = Go.sendFiles(target, paths)
                                 ok = r.isSuccess
-                                if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                                if (!ok) withContext(Dispatchers.Main) {
+                                    sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                                }
                             }
                             if (ok && t.isNotEmpty()) {
                                 val r = Go.sendText(target, t)
                                 ok = r.isSuccess
-                                if (!ok) sendError = "发送失败：${r.exceptionOrNull()?.message}"
+                                if (!ok) withContext(Dispatchers.Main) { sendError = "发送失败：${r.exceptionOrNull()?.message}" }
                             }
                             withContext(Dispatchers.Main) {
                                 if (ok) {
