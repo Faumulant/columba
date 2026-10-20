@@ -51,10 +51,19 @@ jobs:
           # platform_windows.go 有 4 条历史 unsafe.Pointer 提示：窗类名/窗口名转
           # uintptr 存结构体的模式，RegisterClassExW 同步拷贝字符串故实际安全
           #（历史记录见提交信息）。只豁免这一条已知项，其余 vet 失败照常拦。
-          go vet ./... 2>&1 | tee /tmp/vet.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -eq 0 ]; then exit 0; fi
-          rest=$(grep -v 'platform_windows.go:[0-9]*:[0-9]*: possible misuse of unsafe.Pointer' /tmp/vet.log || true)
+          #
+          # 两个坑（2026-10-21 首次 CI 实跑踩到）：
+          #   ① runner 的 bash 带 -e -o pipefail：`go vet | tee` 在 vet 非零时
+          #      整条管道立刻失败退出，后面的过滤根本执行不到；
+          #   ② vet 把诊断写 stderr，Actions 会把每一行标成 ##[error]，但那是
+          #      显示层的标注，不影响脚本判断——真正的问题是 ①。
+          # 所以先把输出落文件、用 `|| true` 兜住退出码，再判内容。
+          go vet ./... > /tmp/vet.log 2>&1 || true
+          if [ ! -s /tmp/vet.log ]; then
+            echo "vet 无输出，通过"
+            exit 0
+          fi
+          rest=$(grep -vE 'platform_windows\.go:[0-9]+:[0-9]+: possible misuse of unsafe\.Pointer' /tmp/vet.log || true)
           if [ -n "$rest" ]; then
             echo "存在未豁免的 vet 问题："
             echo "$rest"
