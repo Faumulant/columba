@@ -65,6 +65,11 @@ jobs:
           echo "仅剩已论证的 unsafe.Pointer 提示，放行"
 
       - name: 单元测试
+        # Linux/macOS 的测试目前是「先跑起来看看」：本项目历史上只在 Windows
+        # 上验证过，部分用例可能隐含 Windows 语义（路径分隔符、文件锁行为）。
+        # 用 continue-on-error 让非 Windows 平台的失败不拦 PR，先收集问题；
+        # Windows 是主力平台，必须全绿。
+        continue-on-error: ${{ matrix.os != 'windows-latest' }}
         run: go test -count=1 -timeout 300s ./...
 
   cross-build:
