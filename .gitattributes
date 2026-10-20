@@ -1,0 +1,21 @@
+# 统一 LF：Windows 检出不再产生 CRLF 噪音
+# 二进制与构建产物显式标注，避免被当成文本做行尾转换
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.xpi binary
+*.aar binary
+*.apk binary
+*.exe binary
+*.jar binary
+*.zip binary
+*.syso binary
+
+# 构建脚本按平台保留原行尾
+*.bat text eol=crlf
+*.cmd text eol=crlf
+gradlew text eol=lf
+*.sh text eol=lf
