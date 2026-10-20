@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
 // 前台服务（specialUse）：常驻模式下宿主 Go 接收端。
@@ -31,6 +30,10 @@ class ReceiverService : Service() {
         // 仅在非常驻模式（被 stopPersistent 连带调用）时由 stop 收尾；
         // 常驻模式下 onDestroy 意味着系统要回收，接收端一并停止
         Receiver.stop(this)
+        // 显式移除前台通知：个别 ROM（荣耀实测）在服务销毁后会把通知留在
+        // 通知栏，用户看到"正在等待接收"但其实已经停了
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        Notifier.cancelStatus(this)
         super.onDestroy()
     }
 
@@ -38,13 +41,7 @@ class ReceiverService : Service() {
         // 进程可能由 BootReceiver 拉起（Activity 从未创建），渠道不一定存在，
         // API 26+ 缺渠道会导致 startForeground 的通知投递失败
         Notifier.ensureChannels(this)
-        val n = NotificationCompat.Builder(this, Notifier.CH_STATUS)
-            .setSmallIcon(R.drawable.ic_stat_columba)
-            .setContentTitle("Columba")
-            .setContentText("正在等待接收")
-            .setOngoing(true)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
+        val n = Notifier.statusNotification(this)
         // specialUse 类型位仅 API 34+ 认识，低版本传类型参数会因与清单解析结果
         // 不一致被框架校验拒绝，故只在 34+ 显式传类型
         if (Build.VERSION.SDK_INT >= 34) {

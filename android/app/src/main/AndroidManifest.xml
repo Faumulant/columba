@@ -74,5 +74,12 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- 常驻通知「关闭」按钮：在通知栏直接停掉后台接收，不打开 App。
+             exported=false + 显式组件：只由本应用的 PendingIntent 触发，
+             外部应用无法构造它去停用户的接收端。 -->
+        <receiver
+            android:name=".StopReceiverAction"
+            android:exported="false" />
     </application>
 </manifest>

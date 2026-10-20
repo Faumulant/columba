@@ -8,6 +8,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -51,14 +52,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.faumulant.columba.AppSettings
 import com.faumulant.columba.Bus
 import com.faumulant.columba.Go
 import com.faumulant.columba.Receiver
+import com.faumulant.columba.R
 import com.faumulant.columba.persistTreePermission
 import com.faumulant.columba.saveSettings
 
@@ -77,6 +84,15 @@ fun SettingsScreen() {
     var folderPickRequested by remember { mutableStateOf(false) }
     var requestNotifPerm by remember { mutableStateOf(false) }
     val self = Bus.self
+
+    // 本页的 settings 是进入组合时的快照；外部改动（通知栏「关闭」把
+    // persistent 置 false）不会自动反映。Bus.persistent 是可观察镜像，
+    // 由 Notifier/StopReceiverAction 侧写入，这里跟随它刷新。
+    LaunchedEffect(Bus.persistent) {
+        if (settings.persistent != Bus.persistent) {
+            settings = settings.copy(persistent = Bus.persistent)
+        }
+    }
 
     fun update(s: AppSettings) {
         settings = s
@@ -271,9 +287,11 @@ fun SettingsScreen() {
                         if (on) {
                             requestNotifPerm = true
                             update(settings.copy(persistent = true))
+                            Bus.persistent = true
                             Receiver.startPersistent(ctx)
                         } else {
                             update(settings.copy(persistent = false))
+                            Bus.persistent = false
                             Receiver.stopPersistent(ctx)
                         }
                     },
@@ -392,16 +410,28 @@ fun SettingsScreen() {
     if (showUnlock) {
         AppDialog(
             onDismiss = { showUnlock = false },
-            title = "解除配对上限",
+            title = "支持作者",
             content = {
                 Text(
-                    "非强制付款，直接点击即可。解除后与电脑端共用同一份标记，两端都不再限 3 台。",
+                    "非强制付款，直接点击即可",
                     fontSize = 13.sp, lineHeight = 19.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(14.dp))
+                // 与 PC 面板同一套收款码（两张图从 panel.html 的 base64 原样导出，
+                // 410x410）。此前安卓端只有文字、没有码，"非强制付款"无从兑现。
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    QrFigure(R.drawable.qr_alipay, "支付宝")
+                    Spacer(Modifier.width(16.dp))
+                    QrFigure(R.drawable.qr_wechat, "微信")
+                }
             },
             buttons = {
-                DlgButton("取消", "ghost") { showUnlock = false }
+                DlgButton("关闭", "ghost") { showUnlock = false }
                 DlgButton("解除上限", "pri") {
                     Bus.bg {
                         val r = Go.unlockDevices()
@@ -470,6 +500,29 @@ fun SettingsScreen() {
                     Bus.refreshDevices()
                 }
             },
+        )
+    }
+}
+
+// 收款码图块：与 PC 面板同语言——白底圆角承载二维码（码本身是黑白的，
+// 深色主题下必须垫白底才扫得出来），下方 12sp 灰色图注。
+@Composable
+private fun QrFigure(resId: Int, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Image(
+            painter = painterResource(resId),
+            contentDescription = "${label}收款码",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .size(118.dp)
+                .clip(RoundedCornerShape(8.dp)),
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            label,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

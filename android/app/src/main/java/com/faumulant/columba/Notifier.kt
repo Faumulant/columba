@@ -40,6 +40,43 @@ object Notifier {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
         )
 
+    // 常驻通知上的「打开」：与点通知本体同一条 Activity 入口
+    private fun openAppPending(ctx: Context): android.app.PendingIntent = openAppIntent(ctx)
+
+    // 常驻通知上的「关闭」：显式组件的 BroadcastReceiver，在通知栏里直接停接收，
+    // 不把 App 拉到前台。requestCode 必须与「打开」不同，否则两个 PendingIntent
+    // 会被 FLAG_UPDATE_CURRENT 合并成同一个动作。
+    private fun stopPending(ctx: Context): android.app.PendingIntent =
+        android.app.PendingIntent.getBroadcast(
+            ctx, 1,
+            Intent(ctx, StopReceiverAction::class.java),
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+    // 常驻状态通知（前台服务要求）。带「打开 / 关闭」两个动作：
+    // 此前下拉展开后什么都没有，用户出门时想让接收停下只能进设置关开关，
+    // 通知栏里取消不掉（前台服务通知被系统标为 ongoing，不允许直接划掉）。
+    fun statusNotification(ctx: Context): Notification =
+        NotificationCompat.Builder(ctx, CH_STATUS)
+            .setSmallIcon(R.drawable.ic_stat_columba)
+            .setContentTitle("Columba")
+            .setContentText("正在等待接收")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(openAppPending(ctx))
+            .addAction(R.drawable.ic_stat_columba, "打开", openAppPending(ctx))
+            .addAction(R.drawable.ic_stat_columba, "关闭", stopPending(ctx))
+            .build()
+
+    fun cancelStatus(ctx: Context) {
+        try {
+            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .cancel(ID_STATUS)
+        } catch (_: Exception) {
+        }
+    }
+
     // 传输进行中：常驻进度条（收发共用一条，完成/失败时由 onTransfer 取消）。
     // 节流：Go 端按块回调时频率可达每秒几十次，每次都跨进程 IPC 到
     // system_server——百分比未变或距上次 <200ms 时跳过（100% 强制刷）。

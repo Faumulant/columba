@@ -42,6 +42,10 @@ object Bus : mobileapi.EventListener {
     var self by mutableStateOf<SelfInfo?>(null)
     // 配对上限（含解锁状态）：设置页设备卡显示「已配对 N/上限」，未解锁时给出入口
     var limit by mutableStateOf(DeviceLimit(3, false))
+    // 「后台接收」开关的可观察镜像：设置页的 settings 是进入组合时的快照，
+    // 而通知栏「关闭」会在后台把 persistent 置 false——不经这里，开关会
+    // 停在「开」而服务已经停了（用户看到状态与实际不符）。
+    var persistent by mutableStateOf(false)
     var pairRequest by mutableStateOf<PairReq?>(null)
     // 配对弹窗的自动收起定时器（与 Go 侧 pairDecisionTimeout 对齐）
     private var pairTimer: Runnable? = null
@@ -78,6 +82,7 @@ object Bus : mobileapi.EventListener {
         if (appCtx != null) return
         appCtx = ctx.applicationContext
         themeMode = AppSettings.load(appCtx!!).themeMode
+        persistent = AppSettings.load(appCtx!!).persistent
         val c = appCtx!!
         bg {
             // 任何 Go 调用前先固定数据目录（identity.AppDir 依赖 LOCALAPPDATA，

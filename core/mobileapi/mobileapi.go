@@ -430,14 +430,20 @@ func (st *state) ensureDiscovery(auto bool) error {
 		if transfer.DebugLog != nil {
 			transfer.DebugLog("宣告泵启动")
 		}
+		// 逐条宣告不落日志：宣告是 2 秒一条的心跳，逐条记录会让
+		// columba-dbg.log 两小时涨满 2MB 轮换，把真正要查的传输/配对记录冲掉
+		// （实测 17332 行里几乎全是同一台设备的同一行）。只在「首次见到该设备」
+		// 和「来源地址变了」时各记一条——后者恰是排障要看的。
+		seen := map[string]string{}
 		for e := range disc.Events() {
-			if transfer.DebugLog != nil {
-				transfer.DebugLog("泵收到事件 ip=%s", e.IP)
+			id := protocol.NormalizeID(e.Announce.ID)
+			if seen[id] != e.IP {
+				seen[id] = e.IP
+				if transfer.DebugLog != nil {
+					transfer.DebugLog("对端 %s 来自 %s", protocol.DisplayID(e.Announce.ID), e.IP)
+				}
 			}
 			tr.Feed(e)
-			if transfer.DebugLog != nil {
-				transfer.DebugLog("feed: %s seen=now ip=%s", protocol.DisplayID(e.Announce.ID), e.IP)
-			}
 			// 对端改名自动同步进信任库（备注名优先，不受影响）
 			if d.trust.RefreshName(e.Announce.ID, e.Announce.Name, e.IP) {
 				st.dispatchChanged()
