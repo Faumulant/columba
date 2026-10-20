@@ -70,23 +70,24 @@ func init() {
 func dbg(format string, args ...any) {
 	msg := fmt.Sprintf("[columba-dbg] "+format, args...)
 	log.Printf("%s", msg)
-	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
-		// 0666 + Chmod：FUSE/sdcardfs 下 shell（ext_data_rw 组）要能 cat，
-		// 0600 会被拒；数据目录根与 files 根各写一份（ROM 权限行为不一）
-		for _, p := range []string{
-			filepath.Join(dir, "columba-dbg.log"),
-			filepath.Join(filepath.Dir(dir), "columba-dbg.log"),
-		} {
-			if st, err := os.Stat(p); err == nil && st.Size() > 2<<20 {
-				os.Remove(p + ".old")
-				os.Rename(p, p+".old")
-			}
-			if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666); err == nil {
-				f.Chmod(0o666)
-				fmt.Fprintln(f, time.Now().Format("15:04:05.000"), msg)
-				f.Close()
-			}
-		}
+	dir := os.Getenv("LOCALAPPDATA")
+	if dir == "" {
+		return
+	}
+	// 只写数据目录根这一份。早先还往 filepath.Dir(dir) 补一份（当时数据目录
+	// 就是 files 根）；现在数据目录是 files/data，父目录是应用外部目录本身，
+	// 多写一份拿不到额外可见性（Android 11+ 两条路径都不许 adb shell 读），
+	// 却会把文件留在 t.TempDir 的根目录之外，让 TempDir 清理报「目录非空」。
+	// 0666 + Chmod：FUSE/sdcardfs 下 shell 要能 cat，0600 会被拒。
+	p := filepath.Join(dir, "columba-dbg.log")
+	if st, err := os.Stat(p); err == nil && st.Size() > 2<<20 {
+		os.Remove(p + ".old")
+		os.Rename(p, p+".old")
+	}
+	if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666); err == nil {
+		f.Chmod(0o666)
+		fmt.Fprintln(f, time.Now().Format("15:04:05.000"), msg)
+		f.Close()
 	}
 }
 
