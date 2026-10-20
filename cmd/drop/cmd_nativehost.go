@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"drop/core/identity"
@@ -25,6 +26,13 @@ type nmRequest struct {
 	Method string          `json:"method"`
 	Body   json.RawMessage `json:"body"`
 }
+
+// nmPathRe 面板 API 路径的封闭形状（/api/name，二级如 /api/pair/start）。
+// path 由扩展提供且直接拼进 URL，而 "http://127.0.0.1:42709@evil.com/?t=TOKEN"
+// 的 host 是 evil.com（127.0.0.1:42709 退化成 userinfo）：不校验就等于
+// 把 IPC token 泄露到外网并可探测内网端口。白名单顺带挡掉 @ ? # 空白 与 ..；
+// 查询串不放行——扩展侧参数都在 body 里。
+var nmPathRe = regexp.MustCompile(`^/api/[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)?$`)
 
 func nativeHostLoop() error {
 	stdin := bufio.NewReader(os.Stdin)
@@ -60,6 +68,10 @@ func nativeHostLoop() error {
 func handleNM(body []byte) map[string]any {
 	var req nmRequest
 	if err := json.Unmarshal(body, &req); err != nil || req.Path == "" {
+		return map[string]any{"ok": false, "message": "请求无效"}
+	}
+	if !nmPathRe.MatchString(req.Path) ||
+		(req.Method != "" && req.Method != http.MethodGet && req.Method != http.MethodPost) {
 		return map[string]any{"ok": false, "message": "请求无效"}
 	}
 	raw, err := os.ReadFile(filepath.Join(identity.AppDir(), "ipc.json"))

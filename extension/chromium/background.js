@@ -3,27 +3,40 @@
 
 const HOST = "drop.drop";
 let port = null;
-let pending = null; // 当前未应答请求的 resolve，保证请求-响应一一对应
+// 串行队列：宿主逐条处理并回信、且回信不带请求 id，扩展同一时刻只允许
+// 一个在途请求，否则连点右键时旧响应会被新请求取走（B 拿到 A 的结果）。
+let queue = Promise.resolve();
+let waiter = null; // 在途请求的收尾句柄：断开或发送失败时结算，避免队列永久挂起
 
 function send(req) {
+  const run = queue.then(() => dispatch(req));
+  queue = run.then(() => undefined, () => undefined); // 单个失败不断链，后续请求继续
+  return run;
+}
+
+function dispatch(req) {
   return new Promise(resolve => {
     if (!port) {
       port = chrome.runtime.connectNative(HOST);
       port.onDisconnect.addListener(() => {
         port = null;
-        if (pending) { const p = pending; pending = null; p(null); }
+        if (waiter) { const w = waiter; waiter = null; w(null); }
         if (chrome.runtime.lastError) console.warn("宿主断开:", chrome.runtime.lastError.message);
       });
     }
-    if (pending) { const p = pending; pending = null; p(null); } // 作废旧请求，避免响应错配
-    pending = resolve;
-    const handler = msg => {
-      if (port) port.onMessage.removeListener(handler);
-      if (pending === resolve) pending = null;
+    const p = port; // 断开后 port 置空，结算时仍需用旧句柄摘除监听
+    const settle = msg => {
+      p.onMessage.removeListener(settle);
+      if (waiter === settle) waiter = null;
       resolve(msg);
     };
-    port.onMessage.addListener(handler);
-    port.postMessage(req);
+    p.onMessage.addListener(settle);
+    waiter = settle;
+    try {
+      p.postMessage(req); // Native Messaging 单消息上限 1MB，超大图片/选中文本会同步抛错
+    } catch (e) {
+      settle({ ok: false, message: String(e) }); // 消息根本没发出，立即结算成失败并提示
+    }
   });
 }
 

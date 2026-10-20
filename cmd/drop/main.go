@@ -37,9 +37,11 @@ const usageText = `drop — 仅局域网的文件投递工具
 func main() {
 	if len(os.Args) < 2 {
 		// dropw.exe（GUI 子系统伴生）无参启动 = 浏览器 Native Messaging 宿主；
-		// drop.exe（控制台主程序）无参显示用法。
+		// drop.exe（控制台主程序）无参显示用法。按基名精确匹配：子串匹配下
+		// 任何名字含 "dropw" 的改名二进制（如 dist 产物）裸启都会去读 stdin，
+		// 表现为「无输出挂着」。
 		if exe, err := os.Executable(); err == nil &&
-			strings.Contains(strings.ToLower(filepath.Base(exe)), "dropw") {
+			strings.TrimSuffix(strings.ToLower(filepath.Base(exe)), ".exe") == "dropw" {
 			if err := nativeHostLoop(); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
