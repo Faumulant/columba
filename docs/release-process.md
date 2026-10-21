@@ -14,7 +14,7 @@
 ```bash
 cd <仓库根目录>
 
-# 1. 构建产物（必须用 build.bat：它清 GOWORK，保证用 fork 的 go-webview2）
+# 1. 构建桌面产物（必须用 build.bat：它清 GOWORK，保证用 fork 的 go-webview2）
 cmd //c build.bat
 
 # 2. 构建安装包
@@ -22,30 +22,56 @@ cd installer
 "/c/Users/<你>/AppData/Local/Programs/Inno Setup 6/ISCC.exe" columba.iss
 cd ..
 
-# 3. 汇总到 dist/ 并生成校验和
+# 3. 重建安卓 AAR + APK（core/ 有改动时必须做，否则 APK 是旧代码）
+export PATH="$PWD/tools/jdk-21/bin:$PATH"
+GOWORK=off gomobile bind -target=android -androidapi 26 -ldflags "-s -w" \
+  -o android/app/libs/mobileapi.aar ./core/mobileapi
+cd android && ./gradlew assembleRelease --no-daemon && cd ..
+
+# 4. 汇总到 dist/ 并生成校验和
 mkdir -p dist
 cp drop.exe dropw.exe installer/dist/Columba-<版本>-setup.exe dist/
-cd dist && sha256sum drop.exe dropw.exe Columba-<版本>-setup.exe > SHA256SUMS.txt && cd ..
+cp android/app/build/outputs/apk/release/app-arm64-v8a-release.apk dist/Columba-<版本>-arm64-v8a.apk
+cd dist && sha256sum drop.exe dropw.exe Columba-<版本>-setup.exe Columba-<版本>-arm64-v8a.apk > SHA256SUMS.txt && cd ..
 
-# 4. 打 tag 并推送
+# 5. 打 tag 并推送
 git tag -a v<版本> -m "Columba v<版本>"
 git push origin v<版本>
 
-# 5. 创建 draft release（草稿：只有协作者可见，不对外）
+# 6. 创建 draft release（草稿：只有协作者可见，不对外）
 gh release create v<版本> --draft \
   --title "Columba（飞鸠）v<版本>" \
   --notes-file docs/release-notes-v<版本>.md \
-  dist/drop.exe dist/dropw.exe dist/Columba-<版本>-setup.exe dist/SHA256SUMS.txt
+  dist/drop.exe dist/dropw.exe dist/Columba-<版本>-setup.exe \
+  dist/Columba-<版本>-arm64-v8a.apk dist/SHA256SUMS.txt
 
-# 6. 核对
+# 7. 核对
 gh release view v<版本> --json isDraft,name,tagName,assets
 ```
+
+## 安卓 APK 的 ABI 策略
+
+`splits.abi` 配了四个架构 + `isUniversalApk = true`，所以构建产出 5 个 APK：
+
+| 文件 | 大小 | 用途 |
+|---|---|---|
+| `app-arm64-v8a-release.apk` | 约 9.4 MB | **对外发布**（近 8 年所有安卓设备） |
+| `app-armeabi-v7a-release.apk` | 约 9.5 MB | 32 位老设备，本地保留 |
+| `app-x86-release.apk` / `app-x86_64-release.apk` | 约 9.5 MB | 模拟器，本地保留 |
+| `app-universal-release.apk` | 约 35.8 MB | 四架构完整包，本地自用 |
+
+**别用 abiFilters 只留 arm64** —— 那样会把完整包一起丢掉，模拟器就装不了。
+splits 是「完整包 + 每架构一个」并存。
 
 ## 注意
 
 **`dist/` 里的旧文件会混进 release。** 首次跑时发现一个 9-26 的
 `drop-extension.xpi` 躺在里面（早已过时的扩展包）。上传前先 `ls dist/` 看一眼，
 只留本次要发的文件。
+
+**APK 会过时。** `android/app/libs/mobileapi.aar` 是 gomobile 从 `core/` 编出来的快照。
+`core/` 一改（哪怕只改注释），AAR 与 APK 就落后了。发版前必须重新 bind + assemble，
+否则用户装到的手机端缺新功能。判断方法：比较 `core/**/*.go` 与 AAR 的 mtime。
 
 **SHA256 会由 GitHub 独立计算一次。** `gh release view --json assets` 里的
 `digest` 字段是 GitHub 自己算的，与本地 `SHA256SUMS.txt` 对比可确认上传无损。

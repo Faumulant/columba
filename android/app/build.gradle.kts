@@ -26,6 +26,20 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // ABI 分包：完整包（四架构，约 36MB）+ 每架构一个单独包。
+    //
+    // 为什么不用 abiFilters 只留 arm64：那样会**丢掉**完整包，模拟器就没法装了。
+    // splits 是「完整包 + 每架构一个」并存，isUniversalApk=true 正是保留完整包。
+    // 对外只发 arm64-v8a 那个（约 12MB），其余留在本地自用。
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
