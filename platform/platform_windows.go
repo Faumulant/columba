@@ -308,6 +308,7 @@ var panelMu sync.Mutex
 
 func OpenPanelWindow(url string) error {
 	if useLegacyPanel {
+		logToDaemon("OpenPanelWindow: useLegacyPanel=true → legacy")
 		return openPanelLegacy(url)
 	}
 	panelMu.Lock()
@@ -514,6 +515,7 @@ func panelWindowMain(url string) {
 
 	inst, _, _ := procGetModuleHandleW.Call(0)
 	if inst == 0 || !registerPanelClass(inst) {
+		logToDaemon(fmt.Sprintf("panelWindowMain: registerPanelClass 失败 inst=%d", inst))
 		openPanelLegacy(url)
 		return
 	}
@@ -542,6 +544,7 @@ func panelWindowMain(url string) {
 		0, 0, inst, 0,
 	)
 	if hwnd == 0 {
+		logToDaemon("panelWindowMain: CreateWindowExW 失败，回退 legacy")
 		openPanelLegacy(url)
 		return
 	}
@@ -554,6 +557,14 @@ func panelWindowMain(url string) {
 	// 一内容两个面板；edge.Chromium.Embed 才是真嵌入（同步完成，失败可回退）。
 	browser := edge.NewChromium()
 	browser.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateAllow)
+	// 导航结果诊断：v3 面板曾出现「窗口正常、标题正常、内容全白」，而同一 URL
+	// 用 Edge App 模式打开完全正常——说明 HTML/JS 没问题，是嵌入路径的渲染没起来。
+	// 这个回调能给出 IsSuccess 与 WebErrorStatus，是判断「页面到底加载成功没有」
+	// 的唯一可靠依据（比看截图可靠）。
+	browser.NavigationCompletedCallback = func(sender *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		logToDaemon(fmt.Sprintf("面板导航完成: isSuccess=%v webErrorStatus=%d",
+			args.IsSuccess(), args.WebErrorStatus()))
+	}
 	panelPinner.Pin(browser) // 递归固定整棵回调对象树，防 GC 移动（见 panelPinner 注释）
 	panelBrowser = browser   // 先挂上：Embed 内部会泵消息，窗口过程可能先于就绪被调（Resize/Focus 均 nil 安全）
 	if !browser.Embed(hwnd) {
@@ -569,12 +580,28 @@ func panelWindowMain(url string) {
 	panelHwnd = hwnd
 	browser.Resize() // 初始边界 = 客户区（不自定会停在 0x0 → 白屏）
 	browser.Navigate(url)
+	// WebView2 的 controller 创建后 IsVisible 默认是 false，必须显式 Show()，
+	// 否则窗口与标题栏都正常、内容区却是一片空白。
+	// 这是 v3 自管窗口路径独有的坑：legacy 由 go-webview2 库自己处理显示，
+	// 所以「legacy 正常、v3 白屏」曾经很难归因（同一 URL 用 Edge App 模式
+	// 打开完全正常，说明 HTML/JS 没问题）。2026-10-21 用 NavigationCompleted
+	// 确认 isSuccess=true 后才定位到这里——页面加载成功，只是不可见。
+	if err := browser.Show(); err != nil {
+		logToDaemon("面板 Show 失败: " + err.Error())
+	}
 	// 隐藏状态下给渲染引擎 300ms 完成深色首绘：显示瞬间即是最终形态，
 	// 不再出现「先白后黑」的初始化闪断
 	time.Sleep(300 * time.Millisecond)
 
 	go trackPanelSize(unsafe.Pointer(hwnd), scale) // 记住上次窗口大小
 	procShowWindow.Call(hwnd, 5 /*SW_SHOW*/)
+	// 显示后再 Resize 一次：创建时是 WS_OVERLAPPEDWINDOW 不带 WS_VISIBLE，
+	// 隐藏窗口的 GetClientRect 在部分环境返回 0×0，之前那次 Resize 等于把
+	// WebView2 视口设成了 0 —— 面板能显示但内容区全白。
+	// ShowWindow 后尺寸已确定，这一次才是有效值。
+	if panelBrowser != nil {
+		panelBrowser.Resize()
+	}
 	panelMessageLoop() // 消息泵：WM_DESTROY → PostQuitMessage 后返回
 	panelPinner.Unpin()
 	panelHwnd = 0
