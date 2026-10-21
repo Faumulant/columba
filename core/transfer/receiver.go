@@ -347,6 +347,9 @@ func (r *Receiver) handleCancel(w http.ResponseWriter, req *http.Request) {
 		name string
 		size int64
 		part string
+		// first 本路径是第一个给这个文件定结局的：只有 first 负责写历史，
+		// 否则两条路径各写一条（读中断 + 取消通知），历史里会出现重复条目。
+		first bool
 	}
 	var recs []rec
 	for _, st := range targets {
@@ -358,17 +361,22 @@ func (r *Receiver) handleCancel(w http.ResponseWriter, req *http.Request) {
 			st.file = nil
 		}
 		st.hash = nil
+		first := !st.recorded
 		st.recorded = true
-		recs = append(recs, rec{name: st.meta.Path, size: st.meta.Size, part: st.part})
+		recs = append(recs, rec{name: st.meta.Path, size: st.meta.Size, part: st.part, first: first})
 	}
 	r.mu.Unlock()
 
 	for _, rc := range recs {
 		os.Remove(rc.part)
-		// 读中断可能先到并记了 failed：就地改写成 canceled，不追加第二条。
-		// 找不到既有记录（取消先到、读中断还没发生）才补一条。
-		if !history.ReclassifyCanceled("recv", pid, rc.name, "对方已取消传输") {
+		if rc.first {
+			// 本路径先到：直接记 canceled
 			r.recordStatus(peer, pid, rc.name, "", rc.size, history.StatusCanceled, "对方已取消传输")
+		} else {
+			// 读中断先到、已写了一条 failed：就地改写成 canceled，不追加第二条。
+			// 改不到（极少数：failed 还没落盘完）就什么都不做——读中断那条最终
+			// 会被用户看到成「传输中断」，比冒重复条目的风险好。
+			history.ReclassifyCanceled("recv", pid, rc.name, "对方已取消传输")
 		}
 		// 无论历史是改写还是新增，宿主都要收到一次「结束」——否则手机端
 		// 的传输中条目会永久停在最后一帧

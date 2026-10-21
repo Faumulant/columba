@@ -322,27 +322,39 @@ func TestSendCancelNotifiesReceiver(t *testing.T) {
 		t.Fatal("取消后 Send 未返回")
 	}
 
-	// 给取消通知一点到达时间（它是异步发出的，不在 Send 的返回路径上阻塞太久）
+	// 给取消通知一点到达时间（它是异步发出的，不在 Send 的返回路径上阻塞太久）。
+	//
+	// 断言口径（两处都踩过坑，别再改回去）：
+	//   ① 只统计 dir="recv"：本次测试里发送侧与接收侧共用同一个 LOCALAPPDATA
+	//      （mobileapi 的 SetDataDir 就是改进程环境变量），两边的历史写进同一个
+	//      history.jsonl，各记一条 canceled。不区分方向就会误判成「重复记录」。
+	//   ② 不断言「不能有 failed」：读中断与取消通知是两条独立网络事件，先后不确定，
+	//      读中断先到时必然先写一条 failed、随后 cancel 才改写。断言中途不能出现
+	//      failed 会变成竞态测试（CI 上实测偶发失败，本地却通过）。
+	// 真正要钉死的是接收侧最终态：恰好一条 canceled。
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		var sawCanceled, sawFailed bool
+		var canceled, failed int
 		for _, e := range history.Load() {
+			if e.Dir != "recv" {
+				continue // 见 ①
+			}
 			switch e.Status {
 			case history.StatusCanceled:
-				sawCanceled = true
+				canceled++
 			case history.StatusFailed:
-				sawFailed = true
+				failed++
 			}
 		}
-		if sawCanceled {
-			if sawFailed {
-				t.Fatal("取消后接收端不该再留 failed 记录（改写应当就地进行）")
-			}
+		if canceled == 1 && failed == 0 {
 			return
+		}
+		if canceled > 1 {
+			t.Fatalf("接收侧同一次取消不该记两条 canceled（读到 %d 条）", canceled)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("接收端应记 canceled：发送方必须在取消时发 /v1/cancel，"+
+	t.Fatalf("接收侧应记恰好一条 canceled：发送方必须在取消时发 /v1/cancel，"+
 		"否则对端只能从读中断判断、把用户取消记成「传输中断」。现有历史: %+v", history.Load())
 }
 
