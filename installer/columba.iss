@@ -111,7 +111,8 @@ Filename: "{app}\dropw.exe"; Parameters: "run --hidden"; Description: "启动 {#
 [UninstallRun]
 ; 先停 daemon：不停会因 exe 被占用而删不干净
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM dropw.exe"; Flags: runhidden; RunOnceId: "StopDaemon"
-; 移除系统集成（协议/宿主/自启/SendTo）。防火墙规则需要管理员，尽力而为。
+; 移除用户级系统集成（协议/宿主/自启/SendTo）。防火墙规则需要管理员，
+; 由 [Code] 的 CurUninstallStepChanged 单独提权删（见下）。
 Filename: "{app}\drop.exe"; Parameters: "uninstall"; StatusMsg: "正在移除系统集成…"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveIntegration"
 
 [UninstallDelete]
@@ -140,7 +141,25 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
+  ResultCode: Integer;
 begin
+  // 防火墙规则：删除同样需要管理员。卸载器是 lowest 权限，直接调
+  // drop.exe uninstall 里的 RemoveFirewall 必然失败（实测卸载后规则残留）。
+  // 所以这里单独提权一次，与安装时的做法对称。
+  // 放在 usUninstall（删文件之前）：此时 drop.exe 还在，能调用。
+  if CurUninstallStep = usUninstall then
+  begin
+    if Exec(ExpandConstant('{app}\drop.exe'), 'firewall-remove', '',
+            SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      ;
+    // 普通权限删除会失败（返回非 0），此时再提权试一次
+    if ResultCode <> 0 then
+    begin
+      ShellExec('runas', ExpandConstant('{app}\drop.exe'), 'firewall-remove',
+                ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+  end;
+
   if CurUninstallStep = usPostUninstall then
   begin
     DataDir := ExpandConstant('{localappdata}\Drop');

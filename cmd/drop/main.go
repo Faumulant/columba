@@ -15,6 +15,7 @@ const usageText = `drop — 仅局域网的文件投递工具
   drop run                             常驻后台（托盘图标，接收+通知）
   drop install                         一次性系统安装（防火墙规则需管理员）
   drop firewall                        仅注册防火墙规则（安装器调用，需管理员）
+  drop firewall-remove                 仅移除防火墙规则（卸载器调用，需管理员）
   drop uninstall                       移除系统集成
 配对与设备：
   drop pair                            生成一次性配对码，等待对方加入
@@ -133,6 +134,8 @@ func main() {
 		err = cmdInstall()
 	case "firewall":
 		err = cmdFirewall()
+	case "firewall-remove":
+		err = cmdFirewallRemove()
 	case "uninstall":
 		err = cmdUninstall()
 	case "handle":

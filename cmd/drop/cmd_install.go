@@ -25,6 +25,19 @@ func cmdFirewall() error {
 	return nil
 }
 
+// cmdFirewallRemove —— 只删除防火墙入站规则（需要管理员），供卸载器提权调用。
+//
+// 与 cmdFirewall 对称：安装时单独提权加规则，卸载时也必须单独提权删规则。
+// 卸载器本身是 lowest 权限，`drop uninstall` 里的 RemoveFirewall 必然失败，
+// 结果就是卸载后防火墙规则残留在系统里（实测确认过）。
+func cmdFirewallRemove() error {
+	if err := platform.RemoveFirewall(); err != nil {
+		return fmt.Errorf("移除防火墙规则失败（需要管理员权限）: %w", err)
+	}
+	fmt.Println("✓ 防火墙入站规则已移除")
+	return nil
+}
+
 // drop install —— 一次性系统安装。防火墙规则需要管理员权限，
 // 其余（drop: 协议、开机自启）为当前用户级。
 func cmdInstall() error {
