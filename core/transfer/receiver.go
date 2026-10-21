@@ -321,7 +321,7 @@ func (r *Receiver) handleText(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	peer := r.peerName(req)
-	history.Append(history.Entry{Dir: "recv", Peer: peer, Kind: "text", Status: "ok", Text: text})
+	history.Append(history.Entry{Dir: "recv", Peer: peer, PeerID: peerID(req), Kind: "text", Status: "ok", Text: text})
 	if r.opt.OnText != nil {
 		r.opt.OnText(peer, text)
 	}
@@ -543,7 +543,7 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		st.file, st.hash = nil, nil
 		r.mu.Unlock()
-		r.record(r.peerName(req), st.meta.Path, "", st.meta.Size, false, msg)
+		r.record(r.peerName(req), peerID(req), st.meta.Path, "", st.meta.Size, false, msg)
 		http.Error(w, msg, code)
 	}
 	src := &progressReader{r: io.LimitReader(req.Body, st.meta.Size+1), total: st.meta.Size, dir: "recv", peer: r.peerName(req), name: filepath.Base(st.meta.Path)}
@@ -625,7 +625,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	computed := hex.EncodeToString(st.hash.Sum(nil))
 	if !strings.EqualFold(computed, cr.SHA256) {
 		os.Remove(st.part)
-		r.record(r.peerName(req), st.meta.Path, "", st.meta.Size, false, "SHA-256 校验失败")
+		r.record(r.peerName(req), peerID(req), st.meta.Path, "", st.meta.Size, false, "SHA-256 校验失败")
 		writeJSON(w, protocol.CompleteAck{Message: "SHA-256 校验失败，文件已丢弃"})
 		return
 	}
@@ -639,14 +639,14 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, final)), 0o755); err != nil {
 		r.mu.Unlock()
 		os.Remove(st.part)
-		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "创建目标目录失败: "+err.Error())
+		r.record(r.peerName(req), peerID(req), filepath.Base(final), "", st.meta.Size, false, "创建目标目录失败: "+err.Error())
 		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := os.Rename(st.part, filepath.Join(dir, final)); err != nil {
 		r.mu.Unlock()
 		os.Remove(st.part)
-		r.record(r.peerName(req), filepath.Base(final), "", st.meta.Size, false, "保存文件失败: "+err.Error())
+		r.record(r.peerName(req), peerID(req), filepath.Base(final), "", st.meta.Size, false, "保存文件失败: "+err.Error())
 		http.Error(w, "保存文件失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -665,7 +665,7 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 		os.RemoveAll(partDir(dir, cr.SessionID))
 	}
 	savedPath := filepath.Join(dir, final)
-	r.record(r.peerName(req), filepath.Base(final), final, st.meta.Size, true, "")
+	r.record(r.peerName(req), peerID(req), filepath.Base(final), final, st.meta.Size, true, "")
 	fmt.Fprintf(os.Stderr, "✓ 已接收 %s（保存为 %s）\n", filepath.Base(final), savedPath)
 	if r.opt.OnReceived != nil {
 		r.opt.OnReceived(r.peerName(req), filepath.Base(final), savedPath)
@@ -695,8 +695,8 @@ func (r *Receiver) touchAt(sid string, now time.Time) {
 	r.mu.Unlock()
 }
 
-func (r *Receiver) record(peer, name, path string, size int64, ok bool, errMsg string) {
-	e := history.Entry{Dir: "recv", Peer: peer, Name: name, Size: size, Status: "failed", Path: path}
+func (r *Receiver) record(peer, peerID, name, path string, size int64, ok bool, errMsg string) {
+	e := history.Entry{Dir: "recv", Peer: peer, PeerID: peerID, Name: name, Size: size, Status: "failed", Path: path}
 	if ok {
 		e.Status = "ok"
 	} else {

@@ -948,10 +948,21 @@ func (st *state) displayName(d *deviceCtx, t transfer.Target) string {
 // ─── 历史 ────────────────────────────────────────────────────────
 
 // HistoryJSON 全部传输历史（JSON 数组，含 id 供批量删除）。
+// Peer 已按 PeerID 解析为当前显示名（对方改名后旧记录跟随）。
 func HistoryJSON() string {
 	entries := history.Load()
 	if entries == nil {
 		entries = []history.Entry{}
+	}
+	if d, err := st.device(); err == nil {
+		entries = history.ResolvePeerNames(entries, func(id string) string {
+			for _, p := range d.trust.List() {
+				if protocol.NormalizeID(p.ID) == protocol.NormalizeID(id) {
+					return p.DisplayName()
+				}
+			}
+			return ""
+		})
 	}
 	b, err := json.Marshal(entries)
 	if err != nil {

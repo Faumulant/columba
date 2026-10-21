@@ -249,7 +249,7 @@ func SendText(ctx context.Context, id *identity.Identity, t Target, text string)
 	if resp.StatusCode != http.StatusOK {
 		return errors.New(errBody(resp))
 	}
-	history.Append(history.Entry{Dir: "send", Peer: t.Name, Kind: "text", Text: text, Status: "ok"})
+	history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Kind: "text", Text: text, Status: "ok"})
 	return nil
 }
 
@@ -322,12 +322,12 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	}
 	var ack protocol.OfferAck
 	if err := postJSON(ctx, client, t.Addr, protocol.PathOffer, off, &ack); err != nil {
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
 		return displayName(items), fmt.Errorf("无法发起发送: %w", err)
 	}
 	if ack.Message != "" || ack.SessionID == "" {
 		err := fmt.Errorf("对方拒绝了发送: %s", ack.Message)
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
 		return displayName(items), err
 	}
 	fmt.Fprintf(os.Stderr, "开始传输 %d 个文件，共 %s\n", len(items), protocol.HumanBytes(total))
@@ -352,10 +352,10 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	}
 	name := displayName(items)
 	if firstErr != nil {
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, Name: name, Size: total, Status: "failed", Path: srcPath, Error: firstErr.Error()})
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: "failed", Path: srcPath, Error: firstErr.Error()})
 		return name, firstErr
 	}
-	history.Append(history.Entry{Dir: "send", Peer: t.Name, Name: name, Size: total, Status: "ok", Path: srcPath})
+	history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: "ok", Path: srcPath})
 	fmt.Fprintf(os.Stderr, "完成：%s → %s\n", name, t.Name)
 	return name, nil
 }

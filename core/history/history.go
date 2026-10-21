@@ -19,11 +19,17 @@ import (
 
 // Entry 一条传输记录。Dir 为 "send"（发出）或 "recv"（收到）；
 // Kind 为 "file"（默认，空串视为 file）或 "text"（文本内容本身，不落盘）。
+//
+// Peer 与 PeerID 的分工：Peer 是传输「当时」的对端显示名快照，PeerID 是对端
+// 设备 ID（证书指纹）。展示时应优先用 PeerID 到信任库解析当前名字，这样对方
+// 改名后旧记录会跟着变；解析不到（设备已移除、老记录无 PeerID）才回退 Peer。
+// 老记录没有 PeerID 字段，反序列化后为空串，天然走回退路径。
 type Entry struct {
 	ID     string    `json:"id,omitempty"` // 加载时按行位置+内容哈希生成，供批量删除定位
 	Time   time.Time `json:"time"`
 	Dir    string    `json:"dir"`
 	Peer   string    `json:"peer"`
+	PeerID string    `json:"peer_id,omitempty"`
 	Name   string    `json:"name"`
 	Size   int64     `json:"size"`
 	Status string    `json:"status"` // ok / failed
@@ -80,6 +86,34 @@ func Load() []Entry {
 		if json.Unmarshal([]byte(ln), &e) == nil {
 			e.ID = lineID(i, ln)
 			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ResolvePeerNames 用对端设备 ID 到信任库解析当前显示名，返回一份副本。
+//
+// 为什么要覆盖而不是只加字段：面板与手机端都直接读 Peer 渲染，改一处解析
+// 比改两端渲染简单，且两端行为天然一致。
+//
+// 规则：有 PeerID 且能在信任库找到 → 用当前显示名（备注名 > 对方自报名）；
+// 找不到（设备已移除）或无 PeerID（老记录）→ 保留原 Peer 快照。
+// 这样对方改名后旧记录跟着变，而已移除设备的记录仍显示当时的名字。
+//
+// 返回副本而非原地改：调用方常常把 Load() 的结果同时用于别处（测试里也
+// 因此踩到过——同一底层数组被前一次调用改过后，再传 nil 解析器也看不到原值）。
+func ResolvePeerNames(entries []Entry, nameOf func(id string) string) []Entry {
+	out := make([]Entry, len(entries))
+	copy(out, entries)
+	if nameOf == nil {
+		return out
+	}
+	for i := range out {
+		if out[i].PeerID == "" {
+			continue
+		}
+		if n := nameOf(out[i].PeerID); n != "" {
+			out[i].Peer = n
 		}
 	}
 	return out

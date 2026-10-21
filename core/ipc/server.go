@@ -876,7 +876,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"autostart":          platform.AutostartEnabled(),
 		"firefox_dir":        FirefoxExtDir(),
 		"userscript_url":     "/userscript.user.js?t=" + s.token,
-		"history":            history.Load(),
+		"history":            history.ResolvePeerNames(history.Load(), s.displayNameOf),
 		"progress":           s.progressSnapshot(),
 	})
 }
