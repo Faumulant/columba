@@ -12,7 +12,7 @@
 ## 步骤
 
 ```bash
-cd <仓库>
+cd <仓库根目录>
 
 # 1. 构建产物（必须用 build.bat：它清 GOWORK，保证用 fork 的 go-webview2）
 cmd //c build.bat

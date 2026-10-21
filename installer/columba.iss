@@ -5,9 +5,9 @@
 ; 最初写成 PrivilegesRequired=admin（装到 Program Files），实测在用户机器上
 ; 第一步解压就失败：
 ;     Setup was unable to create the directory
-;     "C:\Users\<短名>\AppData\Local\Temp\is-XXXX.tmp"  Error 5: 拒绝访问
-; 该机器 USERNAME 是 8.3 短名（Faumu），而用户目录是长名（Faumu），
-; 提权后的进程访问短名路径被拒。这不是本项目能修的，但可以绕开：
+;     "C:\Users\<8.3 短名>\AppData\Local\Temp\is-XXXX.tmp"  Error 5: 拒绝访问
+; 该机器 USERNAME 环境变量是 8.3 短名、而用户目录是长名，提权后的进程
+; 访问短名路径被拒（换过硬盘/改过盘符的机器常见）。这不是本项目能修的，但可以绕开：
 ;
 ; 改成 PrivilegesRequired=lowest → 解压发生在**普通用户上下文**，
 ; TEMP 确定可写（已实测 writable=True）；安装目录变成

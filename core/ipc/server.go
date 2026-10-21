@@ -823,7 +823,7 @@ func (s *Server) onlineSet() map[string]bool {
 // 找不到时回退到宣告里的自报名。
 // 为什么不在 Target.Name 直接用 Announce.Name：宣告名是对方「此刻」的自报名
 // （手机端未改名时就是 localhost），而面板/历史显示的是信任库解析后的名字
-// （如 示例设备）。两者不一致会让进度条显示 localhost、历史却显示 示例设备。
+// （如设备自报名）。两者不一致会让进度条显示 localhost、历史却显示设备自报名。
 func (s *Server) displayNameOf(id string) string {
 	key := protocol.NormalizeID(id)
 	for _, p := range s.trust.List() {
