@@ -58,9 +58,14 @@ var pairDecisionTimeout = 3 * time.Minute
 
 func init() {
 	transfer.DebugLog = dbg
-	// 传输进度：转发给宿主事件（Bus 更新通知进度条）
+	// 传输进度：转发给宿主事件（Bus 更新通知进度条与「传输中」条目）
 	transfer.ProgressHook = func(dir, peer, name string, done, total int64) {
 		st.dispatchProgress(dir, peer, name, done, total)
+	}
+	// 传输开始：宿主据此立刻插入临时条目。必须独立于 ProgressHook——
+	// 后者 800ms 才首触发且只在百分比变化时回调，小文件会完全漏掉。
+	transfer.StartHook = func(dir, peer, name string, total int64) {
+		st.dispatchTransferStart(dir, peer, name, total)
 	}
 }
 
@@ -106,8 +111,14 @@ type EventListener interface {
 	// OnDeviceChanged 设备列表/在线状态发生变化（配对成功、移除、上下线）。
 	OnDeviceChanged()
 	// OnProgress 传输进行中（约 800ms 节流一次；done==total 由 OnTransfer 收尾）。
-	// done/total 为当前文件的字节进度。
+	// done/total 为当前文件的字节进度。多文件发送时为整批口径（name 为
+	// 「N 个文件」、total 为总字节）。
 	OnProgress(dir string, peer string, name string, done int64, total int64)
+	// OnTransferStart 一次传输开始（每个文件的第一次进度上报之前触发）。
+	// dir/peer/name/total 口径与 OnProgress 一致。宿主要「传输开始即插入临时
+	// 条目」就靠它：OnProgress 受 800ms 节流且只在百分比变化时回调，小文件
+	// （<800ms 传完）可能一次 OnProgress 都没有，只挂 OnProgress 会漏掉条目。
+	OnTransferStart(dir string, peer string, name string, total int64)
 }
 
 type deviceCtx struct {
@@ -143,6 +154,9 @@ type state struct {
 	pending *pairPending
 
 	probeNow chan struct{} // 立即探测信号（点信标等场景）；缓冲 1，连发合并
+
+	// sendCancel 当前发送的可取消句柄；非空表示有发送在跑（互斥）。
+	sendCancel context.CancelFunc
 }
 
 func newState() *state {
@@ -297,6 +311,11 @@ func StartReceiver(saveDir string, autoSave bool, listener EventListener) error 
 		},
 		OnReceived: func(peer, name, path string) {
 			st.dispatchTransfer("recv", peer, name, path, fileSize(path), true, "")
+		},
+		// 接收失败/取消：必须也发 OnTransfer(ok=false)，否则宿主的「传输中」
+		// 条目永远等不到收场事件（真机实测：取消后条目停在 6% 不消失）
+		OnFailed: func(peer, name string, canceled bool, reason string) {
+			st.dispatchTransfer("recv", peer, name, "", 0, false, reason)
 		},
 		OnText: func(peer, text string) {
 			st.dispatchText("recv", peer, text)
@@ -865,6 +884,19 @@ func SendFiles(targetID string, pathsJSON string) error {
 	return st.sendFiles(d, targetID, paths)
 }
 
+// CancelSend 取消进行中的发送（丢弃已传部分，不支持续传）。
+// 没有进行中的发送时返回错误而非静默成功——宿主据此区分「点了没反应」和「真取消了」。
+func CancelSend() error {
+	st.mu.Lock()
+	cancel := st.sendCancel
+	st.mu.Unlock()
+	if cancel == nil {
+		return errors.New("当前没有进行中的发送")
+	}
+	cancel() // 中断 transfer.Send 的 ctx；历史由 Send 内部记 canceled
+	return nil
+}
+
 func (st *state) sendFiles(d *deviceCtx, targetID string, paths []string) error {
 	if len(paths) == 0 {
 		return errors.New("没有可发送的文件")
@@ -875,7 +907,25 @@ func (st *state) sendFiles(d *deviceCtx, targetID string, paths []string) error 
 	}
 	peer := st.displayName(d, t)
 	total := pathsSize(paths)
-	name, err := transfer.Send(context.Background(), d.id, t, paths,
+
+	// 可取消：把 cancel 存进 state，宿主经 CancelSend 中断本次发送。
+	ctx, cancel := context.WithCancel(context.Background())
+	st.mu.Lock()
+	if st.sendCancel != nil {
+		st.mu.Unlock()
+		cancel()
+		return errors.New("正在发送中：请等当前传输结束或先取消")
+	}
+	st.sendCancel = cancel
+	st.mu.Unlock()
+	defer func() {
+		st.mu.Lock()
+		st.sendCancel = nil
+		st.mu.Unlock()
+		cancel()
+	}()
+
+	name, err := transfer.Send(ctx, d.id, t, paths,
 		transfer.SendOptions{SkipSourcePath: true}) // 应用缓存路径对历史无意义
 	st.dispatchTransfer("send", peer, name, paths[0], total, err == nil, errText(err))
 	return err
@@ -1071,6 +1121,19 @@ func (st *state) dispatchTransfer(dir, peer, name, path string, size int64, ok b
 	go func() {
 		defer recoverPanic("OnTransfer")
 		l.OnTransfer(dir, peer, name, path, size, ok, errInfo)
+	}()
+}
+
+func (st *state) dispatchTransferStart(dir, peer, name string, total int64) {
+	st.mu.Lock()
+	l := st.listener
+	st.mu.Unlock()
+	if l == nil {
+		return
+	}
+	go func() {
+		defer recoverPanic("OnTransferStart")
+		l.OnTransferStart(dir, peer, name, total)
 	}()
 }
 

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Launch
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -136,7 +137,11 @@ fun ReceiveScreen(
             }
             // 设置读取提升到列表级一次（此前每张卡片重组都读一遍 SharedPreferences）
             val autoSave = AppSettings.load(LocalContext.current).isAuto
-            if (list.isEmpty()) {
+            // 传输中的临时条目：只有「文件」类目下、且分类匹配时才显示在列表首位。
+            // 它的 name 是文件名或「N 个文件」，分类按名字推断，与正式记录同一套规则。
+            val fly = Bus.inflight
+            val flyShown = fly != null && cats[currentCat] == HistoryEntry.categoryOfName(fly.name)
+            if (list.isEmpty() && !flyShown) {
                 EmptyState()
             } else {
                 LazyColumn(
@@ -144,6 +149,14 @@ fun ReceiveScreen(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (flyShown) {
+                        item(key = "inflight") {
+                            InflightCard(
+                                it = fly!!,
+                                onCancel = { Bus.cancelInflight() },
+                            )
+                        }
+                    }
                     items(list, key = { it.id }) { e ->
                         RecordCard(
                             entry = e,
@@ -280,6 +293,49 @@ private fun EmptyState() {
     }
 }
 
+// InflightCard 传输中的临时条目：与正式记录同一张卡片语言，右侧换成圆环进度。
+// 发送方向给「取消」按钮（接收方向由对端控制，本机取消不了）。
+@Composable
+private fun InflightCard(it: Bus.Inflight, onCancel: () -> Unit) {
+    Surface(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp)),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, HairlineColor),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            CategoryIcon(HistoryEntry(name = it.name), 40)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(
+                    it.name, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DirectionPill(it.dir)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        (if (it.total > 0) fmtSize(it.total) + " · " else "") +
+                            (if (it.dir == "send") "发送中" else "接收中"),
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            if (it.dir == "send") {
+                TextButton(onClick = onCancel, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text("取消", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.width(2.dp))
+            }
+            ProgressRing(pct = it.pct, recv = it.dir == "recv")
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecordCard(entry: HistoryEntry, autoSave: Boolean, onClick: () -> Unit, onLongPress: () -> Unit, onSave: () -> Unit) {
@@ -320,15 +376,26 @@ private fun RecordCard(entry: HistoryEntry, autoSave: Boolean, onClick: () -> Un
                     Spacer(Modifier.width(8.dp))
                     Text(
                         fmtTime(entry.time) + (if (entry.size > 0 && !entry.isText) " · " + fmtSize(entry.size) else "") +
-                            if (entry.status != "ok") " · 传输中断" else "",
+                            // 取消不是故障：文案与失败分开，别让用户以为出了错
+                            when {
+                                entry.status == "ok" -> ""
+                                entry.isCanceled -> " · 已取消"
+                                else -> " · 传输中断"
+                            },
                         fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
                     )
                 }
             }
-            if (entry.status == "ok") {
-                Icon(Icons.Filled.CheckCircle, null, tint = SuccessColor, modifier = Modifier.size(18.dp))
-            } else {
-                Icon(Icons.Filled.ErrorOutline, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+            when {
+                entry.status == "ok" ->
+                    Icon(Icons.Filled.CheckCircle, null, tint = SuccessColor, modifier = Modifier.size(18.dp))
+                entry.isCanceled ->
+                    // 中性减号：用户自己停的，不该显示成红色错误
+                    Icon(Icons.Filled.RemoveCircleOutline, null,
+                        tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+                else ->
+                    Icon(Icons.Filled.ErrorOutline, null,
+                        tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
             }
             // 手动保存模式：收到的文件给「保存」按钮（D3）
             if (!entry.isText && entry.isRecv && entry.status == "ok" && !autoSave) {

@@ -20,6 +20,10 @@ const (
 	// PathUnlock 解锁状态同步：已配对设备之间互通「设备数量上限已解除」。
 	// 只对已配对设备开放（与其余数据端点同一授权门槛）。
 	PathUnlock = "/v1/unlock"
+	// PathCancel 主动取消通知：发送方用户点了「取消」时告知接收端。
+	// 没有它，接收端只能从「读 body 中断」判断，而网络中断的表现完全一样，
+	// 会把断网误记成「对方取消」。旧版本对端收到它只会 404，忽略即可（向后兼容）。
+	PathCancel = "/v1/cancel"
 )
 
 // Announce 局域网发现宣告（UDP 组播）。
@@ -95,6 +99,14 @@ type UnlockMsg struct {
 
 type UnlockAck struct {
 	OK bool `json:"ok"`
+}
+
+// CancelMsg 发送方主动取消的通知。只带会话与文件名，用于让接收端把这条记录
+// 标成「已取消」并清掉 .part——与「读 body 中断」区分开，后者才是故障。
+type CancelMsg struct {
+	Proto     int    `json:"proto"`
+	SessionID string `json:"session_id"`
+	FileID    string `json:"file_id,omitempty"` // 空表示整批取消
 }
 
 // NormalizeID 去掉 ID 的显示分隔符并统一大写。

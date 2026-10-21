@@ -49,11 +49,16 @@ type ReceiveOptions struct {
 	DirFn       func() string
 	ConfirmPeer func(name, id string) bool
 	OnReceived  func(peer, name, path string)
-	OnText      func(peer, text string)
-	MaxDevices  func() int
-	OnUnlocked  func(peer string)
-	FreeDisk    func(path string) (uint64, error)
-	ExitOnPair  bool
+	// OnFailed 一个文件的接收以失败/取消收场时调用（成功走 OnReceived）。
+	// 必须成对：宿主靠它把「传输中」条目收场，缺了它条目会永久卡在最后一帧
+	// （手机端实测：取消后临时条目停在 6% 不消失）。canceled 为 true 表示
+	// 对端主动取消（/v1/cancel），false 表示真失败（断线、校验失败等）。
+	OnFailed   func(peer, name string, canceled bool, reason string)
+	OnText     func(peer, text string)
+	MaxDevices func() int
+	OnUnlocked func(peer string)
+	FreeDisk   func(path string) (uint64, error)
+	ExitOnPair bool
 }
 
 type fileState struct {
@@ -64,6 +69,10 @@ type fileState struct {
 	bytes int64
 	got   bool // 上传完成，等待 complete 校验
 	done  bool // complete 已受理（防并发重复落盘）
+	// recorded 本文件的结局已写入历史。/v1/cancel 与「上传读中断」是两条独立
+	// 的网络事件、先后不确定：先到者负责写记录，后到者只改写（取消时把已写的
+	// failed 改成 canceled），绝不追加第二条。
+	recorded bool
 	// saved 为落盘后的最终文件名，非空即本次传输已成功。发送方补投
 	// complete（响应丢包）时靠它返回同一结果而不是 409。
 	saved string
@@ -246,7 +255,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case protocol.PathPair:
 		r.handlePair(w, req)
 		return
-	case protocol.PathOffer, protocol.PathUpload, protocol.PathComplete, protocol.PathText, protocol.PathUnlock:
+	case protocol.PathOffer, protocol.PathUpload, protocol.PathComplete, protocol.PathText, protocol.PathUnlock, protocol.PathCancel:
 	default:
 		http.NotFound(w, req)
 		return
@@ -273,6 +282,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.handleText(w, req)
 	case protocol.PathUnlock:
 		r.handleUnlock(w, req)
+	case protocol.PathCancel:
+		r.handleCancel(w, req)
 	}
 }
 
@@ -299,6 +310,70 @@ func (r *Receiver) handleUnlock(w http.ResponseWriter, req *http.Request) {
 		}
 		if r.opt.OnUnlocked != nil {
 			r.opt.OnUnlocked(r.peerName(req))
+		}
+	}
+	writeJSON(w, protocol.UnlockAck{OK: true})
+}
+
+// handleCancel 接收发送方的主动取消通知：清掉未完成的 .part，把这条记成
+// canceled（而不是 failed）。必须在 handleUpload 的读循环之外完成，因此这里
+// 只动状态、不碰 st.file 的读写缓冲。
+func (r *Receiver) handleCancel(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var cm protocol.CancelMsg
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4<<10)).Decode(&cm); err != nil || cm.Proto != protocol.Version {
+		http.Error(w, "请求无效", http.StatusBadRequest)
+		return
+	}
+	peer, pid := r.peerName(req), peerID(req)
+	r.mu.Lock()
+	s := r.sessions[cm.SessionID]
+	var targets []*fileState
+	if s != nil {
+		if cm.FileID != "" {
+			if st := s.files[cm.FileID]; st != nil {
+				targets = append(targets, st)
+			}
+		} else {
+			for _, st := range s.files {
+				targets = append(targets, st)
+			}
+		}
+	}
+	type rec struct {
+		name string
+		size int64
+		part string
+	}
+	var recs []rec
+	for _, st := range targets {
+		if st.done {
+			continue // 已落盘：取消通知迟到，忽略
+		}
+		if st.file != nil {
+			st.file.Close()
+			st.file = nil
+		}
+		st.hash = nil
+		st.recorded = true
+		recs = append(recs, rec{name: st.meta.Path, size: st.meta.Size, part: st.part})
+	}
+	r.mu.Unlock()
+
+	for _, rc := range recs {
+		os.Remove(rc.part)
+		// 读中断可能先到并记了 failed：就地改写成 canceled，不追加第二条。
+		// 找不到既有记录（取消先到、读中断还没发生）才补一条。
+		if !history.ReclassifyCanceled("recv", pid, rc.name, "对方已取消传输") {
+			r.recordStatus(peer, pid, rc.name, "", rc.size, history.StatusCanceled, "对方已取消传输")
+		}
+		// 无论历史是改写还是新增，宿主都要收到一次「结束」——否则手机端
+		// 的传输中条目会永久停在最后一帧
+		if r.opt.OnFailed != nil {
+			r.opt.OnFailed(peer, filepath.Base(rc.name), true, "对方已取消传输")
 		}
 	}
 	writeJSON(w, protocol.UnlockAck{OK: true})
@@ -538,12 +613,21 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 	}
 
 	discard := func(code int, msg string) {
-		st.file.Close()
-		os.Remove(st.part)
+		// 加锁收尾：/v1/cancel 可能同时进来，两边都要关句柄、都要决定谁写历史
 		r.mu.Lock()
-		st.file, st.hash = nil, nil
+		if st.file != nil {
+			st.file.Close()
+			st.file = nil
+		}
+		st.hash = nil
+		first := !st.recorded
+		st.recorded = true
 		r.mu.Unlock()
-		r.record(r.peerName(req), peerID(req), st.meta.Path, "", st.meta.Size, false, msg)
+		os.Remove(st.part)
+		if first {
+			r.record(r.peerName(req), peerID(req), st.meta.Path, "", st.meta.Size, false, msg)
+			r.notifyFailed(req, st.meta.Path, false, msg)
+		}
 		http.Error(w, msg, code)
 	}
 	src := &progressReader{r: io.LimitReader(req.Body, st.meta.Size+1), total: st.meta.Size, dir: "recv", peer: r.peerName(req), name: filepath.Base(st.meta.Path)}
@@ -566,6 +650,10 @@ func (r *Receiver) handleUpload(w http.ResponseWriter, req *http.Request) {
 	close(stopHeartbeat)
 	stopLog()
 	if err != nil {
+		// 读 body 中断的原因有两种：对端主动取消，或网络真的断了。两者在
+		// 这一层无法区分，所以这里不猜——统一记 failed。主动取消会先走
+		// /v1/cancel 把记录改成 canceled（见 handleCancel），那时这里的
+		// 追加记录会被取消标记覆盖成中性文案。
 		discard(http.StatusBadGateway, "传输中断，已丢弃不完整文件")
 		return
 	}
@@ -673,6 +761,14 @@ func (r *Receiver) handleComplete(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, protocol.CompleteAck{OK: true, SavedAs: filepath.ToSlash(final)})
 }
 
+// notifyFailed 接收侧失败/取消的统一出口（宿主据此收场「传输中」条目）。
+func (r *Receiver) notifyFailed(req *http.Request, path string, canceled bool, reason string) {
+	if r.opt.OnFailed == nil {
+		return
+	}
+	r.opt.OnFailed(r.peerName(req), filepath.Base(path), canceled, reason)
+}
+
 // hostOnly 从 ip:port 提取主机部分；无端口时原样返回。
 func hostOnly(addr string) string {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
@@ -696,10 +792,17 @@ func (r *Receiver) touchAt(sid string, now time.Time) {
 }
 
 func (r *Receiver) record(peer, peerID, name, path string, size int64, ok bool, errMsg string) {
-	e := history.Entry{Dir: "recv", Peer: peer, PeerID: peerID, Name: name, Size: size, Status: "failed", Path: path}
+	status := history.StatusFailed
 	if ok {
-		e.Status = "ok"
-	} else {
+		status = history.StatusOK
+	}
+	r.recordStatus(peer, peerID, name, path, size, status, errMsg)
+}
+
+// recordStatus 按显式状态记一条接收历史（ok / failed / canceled）。
+func (r *Receiver) recordStatus(peer, peerID, name, path string, size int64, status, errMsg string) {
+	e := history.Entry{Dir: "recv", Peer: peer, PeerID: peerID, Name: name, Size: size, Status: status, Path: path}
+	if status != history.StatusOK {
 		e.Error = errMsg
 	}
 	history.Append(e)

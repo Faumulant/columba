@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -225,6 +226,17 @@ fun SendSheet(
             }
             if (selectedId == null) {
                 Text("先在上方选择目标设备", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+            }
+
+            // 发送中：面板被 busy 挡住不可关闭，取消入口只能放这里。
+            // 列表里的临时条目在接收页，用户此刻看不到，所以两处都给。
+            if (busy) {
+                TextButton(
+                    onClick = { Bus.cancelInflight() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("取消发送", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                }
             }
 
             // 失败内联提示：面板内可见，不被遮罩遮挡

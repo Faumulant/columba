@@ -68,6 +68,9 @@ object Go {
     fun sendText(targetId: String, text: String): Result<Unit> = call { Mobileapi.sendText(targetId, text) }
     fun sendFiles(targetId: String, paths: List<String>): Result<Unit> =
         call { Mobileapi.sendFiles(targetId, jsonArrayOf(paths)) }
+    // 取消进行中的发送：丢弃已传部分（断点续传未实现）。无进行中发送时报错，
+    // 宿主据此区分「点了没反应」与「真取消了」。
+    fun cancelSend(): Result<Unit> = call { Mobileapi.cancelSend() }
 
     // ─── 历史与设置 ────────────────────────────────────────────
 

@@ -37,7 +37,7 @@ data class HistoryEntry(
     val peer: String = "",
     val name: String = "",
     val size: Long = 0,
-    val status: String = "ok",  // "ok" / "failed"
+    val status: String = "ok",  // "ok" / "failed" / "canceled"
     val path: String = "",
     val error: String = "",
     val kind: String = "",      // "text" 或空（文件）
@@ -45,6 +45,8 @@ data class HistoryEntry(
 ) {
     val isText: Boolean get() = kind == "text"
     val isRecv: Boolean get() = dir == "recv"
+    // 用户主动取消不是故障：展示「已取消」而非「传输中断」，图标也不同
+    val isCanceled: Boolean get() = status == "canceled"
 
     // 分类：与桌面面板 catOf() 完全同构（文件/音频/图片/视频/文本 五类）
     val category: Category

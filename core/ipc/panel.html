@@ -52,13 +52,26 @@ input,textarea{font-family:inherit;color:var(--txt);background:transparent}
 
 /* ===== 顶部条：设备选择 ===== */
 .topbar{height:58px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid var(--hairline);background:var(--bg)}
-/* 传输进度条：顶栏下方一条细条，仅传输中显示 */
-.xfer{padding:8px 14px 9px;border-bottom:1px solid var(--hairline);background:var(--bg)}
-.xfer-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.xfer-name{font-size:12px;color:var(--sub);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.xfer-pct{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
-.xfer-bar{height:3px;border-radius:2px;background:var(--line-2);overflow:hidden}
-.xfer-bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:2px;transition:width .3s linear}
+/* 传输进度：顶栏右侧圆环指示器（直径 22 · 线宽 2.5 · 中心百分比 10px），
+   与安卓端传输中条目共用同一组数值。只在传输中占位，结束即隐藏，不挤压布局。 */
+.ring{width:22px;height:22px;flex:none;position:relative;margin-right:10px;display:flex;align-items:center;justify-content:center}
+.ring[hidden]{display:none}
+.ring svg{position:absolute;inset:0;width:22px;height:22px;transform:rotate(-90deg)}
+.ring .trk{fill:none;stroke:var(--line-2);stroke-width:2.5}
+.ring .val{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linecap:round;transition:stroke-dashoffset .3s linear}
+.ring b{font-size:10px;font-weight:600;color:var(--sub);font-variant-numeric:tabular-nums;line-height:1;letter-spacing:-.2px}
+/* 三位数（100%）在 17px 内径里放不下：实测 8px 仍顶满内圆，降到 7px 才留出
+   一圈呼吸空间（用 8 倍放大逐档比对过）。两端同一规格，安卓侧 7.sp。 */
+.ring b.tight{font-size:7px;letter-spacing:-.3px}
+.ring.recv .val{stroke:var(--ok)}
+/* 圆环悬停显示传输对象与「取消」：不占布局，鼠标移上去才出现。
+   tip 用 absolute 定位，取消按钮放在 tip 里，避免顶栏常驻多余按钮。 */
+.ring .tip{position:absolute;top:26px;right:0;display:flex;align-items:center;gap:8px;white-space:nowrap;background:var(--card-2);border:1px solid var(--hairline);border-radius:8px;padding:4px 5px 4px 9px;font-size:11.5px;color:var(--sub);box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .15s;z-index:60;max-width:300px}
+.ring:hover .tip{opacity:1;pointer-events:auto}
+.ring .tip .lbl{overflow:hidden;text-overflow:ellipsis;max-width:190px}
+.ring .tip .btn{padding:3px 8px;font-size:11px}
+/* 发送方向才给取消按钮：接收方向由对端控制，本机取消不了 */
+.ring.recv .tip .btn{display:none}
 .topflex{flex:1}
 .brand{font-family:"Caveat",cursive;font-size:20px;color:var(--faint);transform:rotate(-3deg);padding:0 4px;letter-spacing:.5px}
 .dev{position:relative;width:200px}
@@ -115,6 +128,7 @@ input,textarea{font-family:inherit;color:var(--txt);background:transparent}
 .st{width:26px;text-align:center;font-size:15px;font-weight:700;flex:none}
 .st.ok{color:var(--ok)}
 .st.bad{color:var(--err)}
+.st.canceled{color:var(--faint)}
 .acts{display:flex;gap:6px;opacity:0;transition:opacity .18s;min-width:118px;justify-content:flex-end;flex:none}
 .row:hover .acts{opacity:1}
 .ck{width:16px;height:16px;accent-color:var(--accent);flex:none;cursor:pointer}
@@ -211,12 +225,17 @@ input.codein:focus{border-color:var(--sub)}
     </button>
     <div class="dev-menu" id="devMenu"></div>
   </div>
-  <span class="topflex"></span><span class="brand">columba</span>
-</div>
-<!-- 传输进度：仅在有进行中传输时显示（/api/state 的 progress 字段） -->
-<div class="xfer" id="xfer" hidden>
-  <div class="xfer-top"><span class="xfer-name" id="xferName"></span><span class="xfer-pct" id="xferPct"></span></div>
-  <div class="xfer-bar"><i id="xferFill"></i></div>
+  <span class="topflex"></span>
+  <!-- 传输进度圆环：仅传输中显示（/api/state 的 progress 字段）。悬停看传输对象 + 取消。 -->
+  <div class="ring" id="xfer" hidden>
+    <svg viewBox="0 0 22 22"><circle class="trk" cx="11" cy="11" r="9.25"/><circle class="val" id="xferArc" cx="11" cy="11" r="9.25"/></svg>
+    <b id="xferPct">0</b>
+    <span class="tip" id="xferTip">
+      <span class="lbl" id="xferTipLbl"></span>
+      <button class="btn errb" id="xferCancel" onclick="cancelSend()">取消</button>
+    </span>
+  </div>
+  <span class="brand">columba</span>
 </div>
 <div class="app">
   <div class="side" id="side">
@@ -424,6 +443,11 @@ function fileRow(e) {
   const chip = recv ? `<span class="chip in">← 收到 · ${esc(e.peer)}</span>`
                     : `<span class="chip out">→ 发出 · ${esc(e.peer)}</span>`;
   const openable = e.status === "ok" && e.path;
+  // canceled 是用户主动取消，不是故障：用中性圆圈而不是红叉，避免把「自己的
+  // 决定」渲染成「出错了」。failed 才用 ✗。
+  const stCls = e.status === "ok" ? "ok" : (e.status === "canceled" ? "canceled" : "bad");
+  const stIco = e.status === "ok" ? "✓" : (e.status === "canceled" ? "–" : "✗");
+  const stTitle = e.status === "ok" ? "" : esc(e.error || (e.status === "canceled" ? "已取消" : "失败"));
   const acts = openable && !manage
     ? `<div class="acts"><button class="btn" onclick='event.stopPropagation();dropURL("open",${jsStr(e.path)})'>打开</button>
        <button class="btn" onclick='event.stopPropagation();dropURL("reveal",${jsStr(e.path)})'>定位</button></div>`
@@ -435,7 +459,7 @@ function fileRow(e) {
   return `<div class="row${cur}"${rowclick}>${ck}<div class="fico ${CLS[cat]}">${ICON[cat]}</div>
    <div class="fmeta"><div class="fname">${esc(e.name)}</div></div>
    ${chip}<span class="time">${fmtT(e.time)}</span>
-   <span class="st ${e.status === "ok" ? "ok" : "bad"}">${e.status === "ok" ? "✓" : "✗"}</span>${acts}</div>`;
+   <span class="st ${stCls}" title="${stTitle}">${stIco}</span>${acts}</div>`;
 }
 function tcard(e, i) {
   const dir = e.dir === "recv" ? "←" : "→";
@@ -747,18 +771,39 @@ window.addEventListener("drop", e => {
 /* 状态轮询：数据变化且未在交互时才重绘 */
 const lastSig = {v: "", dev: ""};
 let renderKey = "";
-// applyProgress 传输进度条：state 里 progress 为 null 时整条隐藏。
+// applyProgress 顶栏圆环：state 里 progress 为 null 时整体隐藏。
 // 单独更新，不进 render() —— 进度每 3 秒变一次，重绘整个列表会闪烁。
+const RING_C = 2 * Math.PI * 9.25; // 圆环周长，与 HTML 里 r=9.25 对应
 function applyProgress(p) {
   const box = document.getElementById("xfer");
   if (!box) return;
   if (!p) { box.hidden = true; return; }
   box.hidden = false;
+  box.classList.toggle("recv", p.dir === "recv");
+  const pct = Math.max(0, Math.min(100, p.pct || 0));
+  const arc = document.getElementById("xferArc");
+  arc.style.strokeDasharray = RING_C;
+  arc.style.strokeDashoffset = RING_C * (1 - pct / 100);
+  document.getElementById("xferPct").textContent = pct;
+  // 圆环内径只有 16px，三位数放不下：100 时降字号
+  document.getElementById("xferPct").classList.toggle("tight", pct >= 100);
   const dir = p.dir === "recv" ? "接收" : "发送";
-  document.getElementById("xferName").textContent =
+  document.getElementById("xferTipLbl").textContent =
     dir + " " + (p.name || "") + (p.peer ? " · " + p.peer : "");
-  document.getElementById("xferPct").textContent = (p.pct || 0) + "%";
-  document.getElementById("xferFill").style.width = (p.pct || 0) + "%";
+}
+
+// cancelSend 取消进行中的发送。语义是丢弃已传部分（接收端清 .part，两端记「已取消」）。
+function cancelSend() {
+  const btn = document.getElementById("xferCancel");
+  btn.disabled = true;
+  btn.textContent = "取消中…";
+  api("send-cancel", {method:"POST"}).then(r => r.json().then(b => ({ok: r.ok, b})))
+    .then(({ok, b}) => {
+      if (ok) toast("已取消发送");
+      else toast(b.message || "取消失败", {err:true});
+    })
+    .catch(() => toast("取消失败", {err:true}))
+    .finally(() => { btn.disabled = false; btn.textContent = "取消"; });
 }
 
 function refresh() {

@@ -320,6 +320,12 @@ type Server struct {
 	progMu sync.Mutex
 	prog   *transferProgress
 
+	// 发送控制：同一时刻只允许一个面板发起的发送（互斥），且持有可取消句柄。
+	// sendMu 保护以下两个字段；sendCancel 非空表示有发送在跑。
+	sendMu     sync.Mutex
+	sendCancel context.CancelFunc
+	sendName   string // 当前发送的显示名（取消后写进历史与提示）
+
 	OnShutdown func() // daemon 收到关闭指令时回调（启动器接线到退出流程）
 }
 
@@ -530,6 +536,8 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		writeOK(w)
 	case req.URL.Path == "/api/send-files" && req.Method == http.MethodPost:
 		s.handleSendFiles(w, req)
+	case req.URL.Path == "/api/send-cancel" && req.Method == http.MethodPost:
+		s.handleSendCancel(w, req)
 	case req.URL.Path == "/api/send-text" && req.Method == http.MethodPost:
 		s.handleSendText(w, req)
 	case req.URL.Path == "/api/pair/start" && req.Method == http.MethodPost:
@@ -960,6 +968,15 @@ func (s *Server) targetAddr(targetID string) (transfer.Target, error) {
 // handleSendFiles 面板拖拽/选择的文件：先落到临时目录（保留原名），
 // 再走既有文件发送管线，后台完成后弹系统通知。
 func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
+	// 互斥必须先判：放到后面会让「发送中再点发送」先撞上别的校验（比如目标
+	// 未选），用户看到的提示与实际原因不符。这里只判不占位，占位在文件落盘后。
+	s.sendMu.Lock()
+	busy := s.sendCancel != nil
+	s.sendMu.Unlock()
+	if busy {
+		http.Error(w, "正在发送中：请等当前传输结束或先取消", http.StatusConflict)
+		return
+	}
 	if err := req.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "上传解析失败: "+err.Error(), http.StatusBadRequest)
 		return
@@ -1019,8 +1036,27 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// 一次只允许一个面板发起的发送：/api/state 的 progress 只保留一条，
+	// 并发发送会互相覆盖，圆环数字对不上谁是谁。互斥在入队前判定，
+	// 保证「第二次点击」得到明确提示而不是静默串台。
+	s.sendMu.Lock()
+	if s.sendCancel != nil {
+		s.sendMu.Unlock()
+		os.RemoveAll(spool)
+		http.Error(w, "正在发送中：请等当前传输结束或先取消", http.StatusConflict)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+	s.sendCancel = cancel
+	s.sendName = filepath.Base(paths[0])
+	if len(paths) > 1 {
+		s.sendName = fmt.Sprintf("%d 个文件", len(paths))
+	}
+	s.sendMu.Unlock()
+
 	// 先应答，传输在后台执行，结果经系统通知与历史呈现
 	go func() {
+		defer s.clearSend() // 必须在这里清：handler 立即返回，defer 在 handler 上会提前放锁
 		defer os.RemoveAll(spool)
 		t, err := s.targetAddr(target)
 		if err != nil {
@@ -1032,10 +1068,15 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 			}
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
-		defer cancel()
 		sent, err := transfer.Send(ctx, s.id, t, paths, transfer.SendOptions{SkipSourcePath: true})
 		if err != nil {
+			// 用户主动取消：历史已记 canceled，不再弹失败告警（用户知道自己在做什么）
+			if errors.Is(err, transfer.ErrCanceled) {
+				if s.NotifyFile != nil {
+					s.NotifyFile("send", t.Name, sent)
+				}
+				return
+			}
 			if s.NotifyErr != nil {
 				s.NotifyErr("Drop 发送失败", fmt.Sprintf("%s：%v", sent, err))
 			}
@@ -1046,6 +1087,34 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 	writeJSON(w, map[string]any{"ok": true, "started": len(paths)})
+}
+
+// clearSend 清掉发送互斥标记并释放 ctx（发送 goroutine 结束时调用）。
+func (s *Server) clearSend() {
+	s.sendMu.Lock()
+	cancel := s.sendCancel
+	s.sendCancel = nil
+	s.sendName = ""
+	s.sendMu.Unlock()
+	if cancel != nil {
+		cancel() // 幂等：取消路径上已被调用过
+	}
+	s.ClearProgress()
+}
+
+// handleSendCancel 取消进行中的发送。语义是「丢弃已传部分」：接收端收到
+// /v1/cancel 后删掉 .part 并记「已取消」，断点续传不在本次范围。
+func (s *Server) handleSendCancel(w http.ResponseWriter, req *http.Request) {
+	s.sendMu.Lock()
+	cancel := s.sendCancel
+	name := s.sendName
+	s.sendMu.Unlock()
+	if cancel == nil {
+		http.Error(w, "当前没有进行中的发送", http.StatusConflict)
+		return
+	}
+	cancel() // 中断 transfer.Send 的 ctx；历史由 Send 内部记 canceled
+	writeJSON(w, map[string]any{"ok": true, "canceled": name})
 }
 
 func (s *Server) handleSendText(w http.ResponseWriter, req *http.Request) {

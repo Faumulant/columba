@@ -1,6 +1,7 @@
 package com.faumulant.columba.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -38,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +111,52 @@ fun iconOf(entry: HistoryEntry): ImageVector = when (entry.category) {
     HistoryEntry.Category.VIDEO -> Icons.Filled.Movie
     HistoryEntry.Category.TEXT -> Icons.AutoMirrored.Filled.Notes
     else -> Icons.Filled.Description
+}
+
+// ─── 传输进度圆环（桌面与安卓共用同一组数值） ───────────────────
+//
+// 规格（2026-10-21 定，桌面面板 panel.html 的 .ring 用同一组）：
+//   直径 22dp · 线宽 2.5dp · 颜色 accent（接收方向用 ok 绿）· 中心百分比 10sp
+// 两端没有共享代码，数值必须手抄一致，改这里要同步改 panel.html。
+const val RING_DIAMETER_DP = 22
+const val RING_STROKE_DP = 2.5f
+
+// ProgressRing 圆环进度指示器：底环 + 进度弧 + 中心百分比。
+// pct 夹到 0..100；接收方向换绿色，与「收到」语义呼应。
+@Composable
+fun ProgressRing(pct: Int, recv: Boolean, modifier: Modifier = Modifier) {
+    val p = pct.coerceIn(0, 100)
+    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+    val arc = if (recv) SuccessColor else MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier.size(RING_DIAMETER_DP.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val stroke = RING_STROKE_DP.dp.toPx()
+            val d = size.minDimension - stroke
+            val topLeft = androidx.compose.ui.geometry.Offset((size.width - d) / 2f, (size.height - d) / 2f)
+            val arcSize = androidx.compose.ui.geometry.Size(d, d)
+            // 底环
+            drawArc(color = track, startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                topLeft = topLeft, size = arcSize, style = Stroke(width = stroke))
+            // 进度弧：从 12 点方向顺时针
+            if (p > 0) {
+                drawArc(color = arc, startAngle = -90f, sweepAngle = 360f * p / 100f, useCenter = false,
+                    topLeft = topLeft, size = arcSize,
+                    style = Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            }
+        }
+        Text(
+            "$p",
+            // 三位数在 17dp 内径里放不下：7sp 是实测能留出呼吸空间的档位，
+            // 与桌面面板 .ring b.tight（7px）同规格
+            fontSize = if (p >= 100) 7.sp else 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
 }
 
 // 历史时间：Go 侧 RFC3339（移动进程无 TZ 环境，存的是 UTC），用 java.time

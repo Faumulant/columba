@@ -28,6 +28,11 @@ type transferEvt struct {
 
 type textEvt struct{ Dir, Peer, Text string }
 
+type startEvt struct {
+	Dir, Peer, Name string
+	Total           int64
+}
+
 type pairEvt struct{ Name, ID string }
 
 const (
@@ -41,6 +46,7 @@ const (
 type testListener struct {
 	mu         sync.Mutex
 	transfers  []transferEvt
+	starts     []startEvt
 	texts      []textEvt
 	pairs      []pairEvt
 	changed    int
@@ -83,6 +89,19 @@ func (l *testListener) OnPairRequest(peerName, peerID string) bool {
 }
 
 func (l *testListener) OnProgress(dir, peer, name string, done, total int64) {}
+
+func (l *testListener) OnTransferStart(dir, peer, name string, total int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.starts = append(l.starts, startEvt{Dir: dir, Peer: peer, Name: name, Total: total})
+}
+
+// snapshotStarts 传输开始事件快照（传输中条目的入口）。
+func (l *testListener) snapshotStarts() []startEvt {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]startEvt(nil), l.starts...)
+}
 
 func (l *testListener) OnDeviceChanged() {
 	l.mu.Lock()

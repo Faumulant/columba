@@ -32,12 +32,20 @@ type Entry struct {
 	PeerID string    `json:"peer_id,omitempty"`
 	Name   string    `json:"name"`
 	Size   int64     `json:"size"`
-	Status string    `json:"status"` // ok / failed
+	Status string    `json:"status"` // ok / failed / canceled
 	Path   string    `json:"path,omitempty"`
 	Error  string    `json:"error,omitempty"`
 	Kind   string    `json:"kind,omitempty"`
 	Text   string    `json:"text,omitempty"`
 }
+
+// 状态取值。canceled 与 failed 分开：用户主动取消不是故障，两端展示文案与
+// 图标都不同（「已取消」而非「失败：context canceled」这种英文技术串）。
+const (
+	StatusOK       = "ok"
+	StatusFailed   = "failed"
+	StatusCanceled = "canceled"
+)
 
 var mu sync.Mutex
 
@@ -67,6 +75,67 @@ func Append(e Entry) {
 func lineID(idx int, line string) string {
 	sum := sha256.Sum256([]byte(line))
 	return fmt.Sprintf("h%d-%s", idx, hex.EncodeToString(sum[:])[:8])
+}
+
+// ReclassifyCanceled 把最近一条匹配的 failed 记录改写成 canceled，返回是否改写。
+//
+// 为什么需要「改写」而不是「再加一条」：取消通知与「上传读中断」是两条独立的
+// 网络事件，先后顺序不确定。读中断先到时会先记一条 failed，随后到达的取消
+// 通知若再追加一条，用户会在历史里看到同一次取消的两条记录。这里把已有那条
+// 就地改成 canceled 并换成中性文案，语义与展示都正确。
+//
+// 匹配用 dir + peerID + name（接收端取消时 name 是清单里的相对路径，与
+// record 写入的一致）。找不到就返回 false，由调用方决定是否追加。
+func ReclassifyCanceled(dir, peerID, name, errMsg string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	raw, err := os.ReadFile(path())
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		ln := lines[i]
+		if ln == "" {
+			continue
+		}
+		var e Entry
+		if json.Unmarshal([]byte(ln), &e) != nil {
+			continue
+		}
+		if e.Dir != dir || e.Name != name || e.Status != StatusFailed {
+			continue
+		}
+		if peerID != "" && NormalizePeer(e.PeerID) != NormalizePeer(peerID) {
+			continue
+		}
+		e.Status = StatusCanceled
+		e.Error = errMsg
+		b, err := json.Marshal(e)
+		if err != nil {
+			return false
+		}
+		lines[i] = string(b)
+		out := strings.Join(lines, "\n") + "\n"
+		return writeAtomic(path(), out) == nil
+	}
+	return false
+}
+
+// NormalizePeer 对端 ID 比较口径：去掉分隔符、统一大写（与 protocol.NormalizeID
+// 同义，但 history 不依赖 protocol 的其余内容，这里单独给一个薄封装）。
+func NormalizePeer(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == ':' || r == '-' || r == ' ' {
+			continue
+		}
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // Load 读取全部历史（面板用；JSONL 体积在本项目场景下可忽略）。

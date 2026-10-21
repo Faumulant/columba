@@ -39,6 +39,24 @@ object Bus : mobileapi.EventListener {
         private set
     var history by mutableStateOf<List<HistoryEntry>>(emptyList())
         private set
+
+    // 传输中条目：传输开始即插入一条临时条目，右侧圆环显示进度，
+    // 完成后由 onTransfer 清空、refreshHistory 用正式记录替换。
+    // 为什么需要单独的 state 而不是往 history 里塞假条目：history 每次都由
+    // Go.history() 整体替换，塞进去的临时条目下一次刷新就消失，会闪。
+    var inflight by mutableStateOf<Inflight?>(null)
+        private set
+
+    data class Inflight(
+        val dir: String,        // "send" / "recv"
+        val peer: String,
+        val name: String,       // 单文件为文件名，多文件为「N 个文件」
+        val total: Long,        // 整批总字节（多文件时是汇总口径）
+        val done: Long = 0,
+    ) {
+        // 圆环百分比：total 未知（0）时按 0 显示，不猜
+        val pct: Int get() = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
+    }
     var self by mutableStateOf<SelfInfo?>(null)
     // 配对上限（含解锁状态）：设置页设备卡显示「已配对 N/上限」，未解锁时给出入口
     var limit by mutableStateOf(DeviceLimit(3, false))
@@ -181,6 +199,19 @@ object Bus : mobileapi.EventListener {
     }
     fun clearSnackbar() { snackbar = null }
 
+    // cancelInflight 取消当前发送（丢弃已传部分）。接收方向不可取消：那是
+    // 对端在发，本机只能等它结束或断开。
+    fun cancelInflight() {
+        val cur = inflight ?: return
+        if (cur.dir != "send") return
+        bg {
+            val r = Go.cancelSend()
+            main.post {
+                showSnackbar(if (r.isSuccess) "已取消发送：${cur.name}" else "取消失败：${r.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
     // 外观循环：跟随系统 → 日间 → 夜间 → …；立即持久化，snackbar 报当前模式
     fun cycleTheme() {
         val ctx = appCtx ?: return
@@ -202,10 +233,26 @@ object Bus : mobileapi.EventListener {
 
     // ─── EventListener（Go 回调，线程不保证） ─────────────────────
 
+    // 传输开始：立刻插入临时条目。必须在 onProgress 之外单独处理——进度回调
+    // 受 800ms 节流，小文件一次都不会触发，只靠 onProgress 会漏掉条目。
+    override fun onTransferStart(dir: String, peer: String, name: String, total: Long) {
+        main.post {
+            inflight = Inflight(dir = dir, peer = peer, name = name, total = total)
+        }
+    }
+
     override fun onProgress(dir: String, peer: String, name: String, done: Long, total: Long) {
         main.post {
             val ctx = appCtx ?: return@post
             if (total > 0) Notifier.progress(ctx, dir, name, (done * 100 / total).toInt())
+            // 临时条目跟着进度走；name/peer 可能变化（多文件汇总名），一并更新
+            val cur = inflight
+            inflight = if (cur != null && cur.dir == dir) {
+                cur.copy(name = name, peer = peer, total = total, done = done)
+            } else {
+                // 没有开始事件（理论上不该发生，兜底：老 AAR 或事件丢失）
+                Inflight(dir = dir, peer = peer, name = name, total = total, done = done)
+            }
         }
     }
 
@@ -213,6 +260,7 @@ object Bus : mobileapi.EventListener {
         val ctx = appCtx ?: return
         main.post {
             Notifier.cancelProgress(ctx)
+            inflight = null // 临时条目退场，下面 refreshHistory 拉正式记录
             refreshHistory()
             if (dir == "recv") {
                 if (ok) {
@@ -220,10 +268,18 @@ object Bus : mobileapi.EventListener {
                     AutoSaver.onReceived(ctx, path, name)
                     if (Receiver.foregroundActive()) showSnackbar("已收到 $name")
                 } else {
-                    showSnackbar("收到失败：$name")
+                    // 取消不是故障：对端主动停时用中性文案，别让接收方以为出了错
+                    val msg = if (errInfo.contains("已取消")) "对方取消了：$name" else "收到失败：$name"
+                    showSnackbar(msg)
                 }
             } else {
-                showSnackbar(if (ok) "已发送到 $peer：$name" else "发送失败：$errInfo")
+                // 取消不是失败：文案中性，别让用户以为出了故障
+                val msg = when {
+                    ok -> "已发送到 $peer：$name"
+                    errInfo.contains("已取消") -> "已取消发送：$name"
+                    else -> "发送失败：$errInfo"
+                }
+                showSnackbar(msg)
             }
         }
     }

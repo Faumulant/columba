@@ -322,18 +322,24 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 	}
 	var ack protocol.OfferAck
 	if err := postJSON(ctx, client, t.Addr, protocol.PathOffer, off, &ack); err != nil {
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
+		status, msg := failureStatus(err)
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: status, Path: srcPath, Error: msg})
+		if status == history.StatusCanceled {
+			return displayName(items), ErrCanceled
+		}
 		return displayName(items), fmt.Errorf("无法发起发送: %w", err)
 	}
 	if ack.Message != "" || ack.SessionID == "" {
 		err := fmt.Errorf("对方拒绝了发送: %s", ack.Message)
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: "failed", Path: srcPath, Error: err.Error()})
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: displayName(items), Size: total, Status: history.StatusFailed, Path: srcPath, Error: err.Error()})
 		return displayName(items), err
 	}
 	fmt.Fprintf(os.Stderr, "开始传输 %d 个文件，共 %s\n", len(items), protocol.HumanBytes(total))
+	// 整批进度口径：宿主端据此显示「N 个文件」的汇总百分比，而不是逐文件回绕
+	agg := &progressAgg{total: total, label: batchLabel(items)}
 	var firstErr error
 	for _, it := range items {
-		uploadedSHA, err := uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
+		uploadedSHA, err := uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name, agg)
 		if err != nil && IsRetryable(err) && ctx.Err() == nil {
 			time.Sleep(600 * time.Millisecond) // 网络抖动：同一文件重试一次
 			if uploadedSHA != "" {
@@ -342,28 +348,53 @@ func Send(ctx context.Context, id *identity.Identity, t Target, paths []string, 
 				// 落盘的文件报成失败，用户手动重发＝对端双份记录。
 				err = completeOne(ctx, client, t.Addr, ack.SessionID, it, uploadedSHA)
 			} else {
-				_, err = uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name)
+				_, err = uploadOne(ctx, client, t.Addr, ack.SessionID, it, t.Name, agg)
 			}
 		}
 		if err != nil {
 			firstErr = err
 			break // 连接已不可靠，后续文件不再尝试
 		}
+		agg.done.Add(it.meta.Size) // 本文件已落盘，计入整批进度
 	}
 	name := displayName(items)
 	if firstErr != nil {
-		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: "failed", Path: srcPath, Error: firstErr.Error()})
+		status, errText := failureStatus(firstErr)
+		history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: status, Path: srcPath, Error: errText})
+		if status == history.StatusCanceled {
+			// 告诉对端「是用户主动取消的」：只靠读中断，接收端无法区分取消与断网，
+			// 会把这次记成「传输中断」（真机实测）。必须在 ctx 之外用新 ctx 发，
+			// 原 ctx 已经取消、带着它发请求只会立刻失败。
+			notifyCancel(client, t.Addr, ack.SessionID, items)
+			return name, ErrCanceled // 对外只报取消，不把 ctx canceled 当异常抛给界面
+		}
 		return name, firstErr
 	}
-	history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: "ok", Path: srcPath})
+	history.Append(history.Entry{Dir: "send", Peer: t.Name, PeerID: t.ID, Name: name, Size: total, Status: history.StatusOK, Path: srcPath})
 	fmt.Fprintf(os.Stderr, "完成：%s → %s\n", name, t.Name)
 	return name, nil
 }
 
+// notifyCancel 发送取消通知（尽力而为：失败不影响本地取消结果）。
+//
+// 用独立的短超时 ctx：调用点上的 ctx 已经因用户取消而失效，拿它发请求必然
+// 立刻失败。对端是旧版本时该端点不存在（404），同样忽略——旧版本本来也只能
+// 从读中断判断，行为不比现在差。
+func notifyCancel(client *http.Client, addr, sid string, items []item) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// 逐文件发：接收端按 FileID 精确清 .part 与记历史；空 FileID 表示整批
+	for _, it := range items {
+		_ = postJSON(ctx, client, addr, protocol.PathCancel, protocol.CancelMsg{
+			Proto: protocol.Version, SessionID: sid, FileID: it.meta.ID,
+		}, nil)
+	}
+}
+
 // uploadOne 送出一个文件：先传内容，再发 complete 落盘。uploadedSHA 非空表示
 // 内容已送达对端（此时 err 只可能出在 complete 这一步），Send 的重试据此只补
-// complete、不重投内容。
-func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item, peer string) (uploadedSHA string, err error) {
+// complete、不重投内容。agg 非空时进度按整批口径上报。
+func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it item, peer string, agg *progressAgg) (uploadedSHA string, err error) {
 	f, err := os.Open(it.local)
 	if err != nil {
 		return "", err
@@ -371,7 +402,7 @@ func uploadOne(ctx context.Context, client *http.Client, addr, sid string, it it
 	defer f.Close()
 
 	h := sha256.New()
-	pr := &progressReader{r: io.TeeReader(f, h), total: it.meta.Size, dir: "send", peer: peer, name: filepath.Base(it.meta.Path)}
+	pr := &progressReader{r: io.TeeReader(f, h), total: it.meta.Size, dir: "send", peer: peer, name: filepath.Base(it.meta.Path), agg: agg}
 	stop := pr.startLog()
 	defer stop()
 
@@ -503,6 +534,21 @@ func displayName(items []item) string {
 	return fmt.Sprintf("%d 个文件", len(items))
 }
 
+// ErrCanceled 用户主动取消传输（宿主经 ctx 取消）。与网络故障区分开：
+// 取消不是失败，历史记 canceled、两端文案都是「已取消」。
+var ErrCanceled = errors.New("传输已取消")
+
+// failureStatus 把发送错误映射成历史状态与展示文案。ctx 取消（用户点了取消）
+// 记 canceled 并给中文文案，其余记 failed 并保留原始错误便于排查。
+func failureStatus(err error) (status, msg string) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// DeadlineExceeded 也归为取消：6 小时超时对用户而言同样是「没传完就停了」，
+		// 展示「context deadline exceeded」只会让人以为是故障
+		return history.StatusCanceled, ErrCanceled.Error()
+	}
+	return history.StatusFailed, err.Error()
+}
+
 func postJSON(ctx context.Context, client *http.Client, addr, endpoint string, in any, out any) error {
 	u := (&url.URL{Scheme: "https", Host: addr, Path: endpoint}).String()
 	b, err := json.Marshal(in)
@@ -522,6 +568,9 @@ func postJSON(ctx context.Context, client *http.Client, addr, endpoint string, i
 	if resp.StatusCode != http.StatusOK {
 		return errors.New(errBody(resp))
 	}
+	if out == nil {
+		return nil // 调用方不关心应答体（如取消通知）
+	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
@@ -534,16 +583,47 @@ func errBody(resp *http.Response) string {
 	return fmt.Sprintf("%s: %s", resp.Status, msg)
 }
 
-// ProgressHook 传输进度回调：dir 为 "send"/"recv"，done/total 为当前文件的
-// 字节进度。由宿主按需设置（手机端联动通知进度条，PC 端暂未使用）；
-// 约 800ms 节流一次，传输结束由宿主的完成事件收尾。
+// ProgressHook 传输进度回调：dir 为 "send"/"recv"，done/total 为字节进度。
+// 由宿主按需设置（手机端联动通知与「传输中」条目，PC 端顶栏圆环）。
+// 传输开始时立即回调一次（done=0），此后约 800ms 节流一次且只在百分比变化时
+// 回调；传输结束由宿主的完成事件收尾。
+//
+// 多文件传输时 done/total 与 name 都是「整批」口径（见 progressAgg）：name 为
+// 「N 个文件」，done 为已完成文件字节 + 当前文件已传字节。否则宿主端会看到
+// 每个文件各自从 0% 跳到 100%，汇总进度条来回横跳。
 var ProgressHook func(dir, peer, name string, done, total int64)
+
+// StartHook 一次传输开始时回调（在首个 ProgressHook 之前，done 恒为 0）。
+// 与 ProgressHook 分开的原因：进度回调受 800ms 节流、且只在百分比变化时触发，
+// 宿主若靠「收到 done==0 的进度」判断开始，会把「开始」与「首个 tick」混为一谈；
+// 显式开始事件让宿主的「传输中」条目出现时机确定。
+// name/total 口径与 ProgressHook 一致（多文件为整批）。
+var StartHook func(dir, peer, name string, total int64)
+
+// progressAgg 一次多文件传输的整体进度累加器。total 为全部字节，done 为已完成
+// 文件的字节累计（原子）；单文件传输也走它，只是 done 恒为 0、total 即文件大小，
+// 这样两条路径的上报口径一致，宿主不必分辨。
+type progressAgg struct {
+	total   int64
+	done    atomic.Int64
+	label   string      // 整批显示名：单文件为文件名，多文件为「N 个文件」
+	started atomic.Bool // 开始事件已发过（多文件只宣告一次）
+}
+
+// batchLabel 整批显示名。单文件用 base name（进度不该带目录层级）。
+func batchLabel(items []item) string {
+	if len(items) == 1 {
+		return filepath.Base(items[0].meta.Path)
+	}
+	return fmt.Sprintf("%d 个文件", len(items))
+}
 
 type progressReader struct {
 	r               io.Reader
 	total           int64
 	done            atomic.Int64
 	dir, peer, name string
+	agg             *progressAgg // 非空时上报整批进度而非本文件进度
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
@@ -554,29 +634,59 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// snapshot 上报口径：有 agg 时把已完成文件的字节并进来、分母换成整批总字节。
+func (p *progressReader) snapshot() (done, total int64, name string) {
+	done, total, name = p.done.Load(), p.total, p.name
+	if p.agg != nil {
+		done += p.agg.done.Load()
+		total = p.agg.total
+		if p.agg.label != "" {
+			name = p.agg.label
+		}
+	}
+	return
+}
+
 func (p *progressReader) startLog() func() {
+	// 显式开始事件：只对整批的第一个文件触发一次（多文件时每个文件的
+	// progressReader 都会走到这里，但「一次传输」只该宣告一次开始）。
+	if p.agg != nil && p.agg.started.CompareAndSwap(false, true) && StartHook != nil {
+		StartHook(p.dir, p.peer, p.agg.label, p.agg.total)
+	} else if p.agg == nil && StartHook != nil {
+		StartHook(p.dir, p.peer, p.name, p.total)
+	}
+
 	done := make(chan struct{})
 	go func() {
+		// 首次上报在 goroutine 内完成，last 只被这一个 goroutine 读写，无需加锁
+		last := int64(-1)
+		report := func() {
+			if ProgressHook == nil {
+				return
+			}
+			d, t, name := p.snapshot()
+			pct := int64(0)
+			if t > 0 {
+				pct = d * 100 / t
+			}
+			if pct != last {
+				last = pct
+				ProgressHook(p.dir, p.peer, name, d, t)
+			}
+		}
+		// 开始即上报：ticker 800ms 才首触发、且只在百分比变化时回调，
+		// 小文件（<800ms 传完）会一次都不上报，宿主端「传输中」条目永不出现。
+		report()
+
 		tick := time.NewTicker(800 * time.Millisecond)
 		defer tick.Stop()
-		last := int64(-1) // 上次上报的百分比（节流）
 		for {
 			select {
 			case <-done:
 				return
 			case <-tick.C:
 				fmt.Fprintf(os.Stderr, "\r  %s / %s", protocol.HumanBytes(p.done.Load()), protocol.HumanBytes(p.total))
-				if ProgressHook != nil {
-					done := p.done.Load()
-					pct := int64(0)
-					if p.total > 0 {
-						pct = done * 100 / p.total
-					}
-					if pct != last {
-						last = pct
-						ProgressHook(p.dir, p.peer, p.name, done, p.total)
-					}
-				}
+				report()
 			}
 		}
 	}()
