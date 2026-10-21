@@ -1024,8 +1024,11 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 		defer os.RemoveAll(spool)
 		t, err := s.targetAddr(target)
 		if err != nil {
+			// 目标离线是「暂时不可达」而非「用户做错了什么」：提示一次就够，
+			// 不再作为失败告警反复弹出（面板最小化/关闭期间用户看不到发送入口，
+			// 弹「发送失败」只会造成困扰）。改成安静记历史 + 一次性轻提示。
 			if s.NotifyErr != nil {
-				s.NotifyErr("Drop 发送失败", err.Error())
+				s.NotifyErr("Columba", err.Error())
 			}
 			return
 		}

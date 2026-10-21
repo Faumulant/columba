@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -336,6 +337,12 @@ func OpenPanelWindow(url string) error {
 // 与 cmd_run 的 DebugLog 同款格式与 2MB 轮换。写日志失败静默返回：
 // 崩溃处理路径上不能让日志问题再放大成二次 panic。
 func logPanelCrash(msg string) {
+	logToDaemon(msg)
+}
+
+// logToDaemon 追加一行到 daemon.log（2MB 轮换，与 cmd_run 的 DebugLog 同格式）。
+// 写失败静默：崩溃/失败处理路径上不能让日志问题再放大成二次 panic。
+func logToDaemon(msg string) {
 	logPath := filepath.Join(identity.AppDir(), "daemon.log")
 	if st, err := os.Stat(logPath); err == nil && st.Size() > 2<<20 {
 		os.Remove(logPath + ".old")
@@ -347,6 +354,29 @@ func logPanelCrash(msg string) {
 	}
 	defer f.Close()
 	fmt.Fprintln(f, time.Now().Format("01-02 15:04:05.000 ")+msg)
+}
+
+// panelLogWriter 把标准 log 包的输出接到 daemon.log。
+//
+// 为什么需要：go-webview2 fork 在 WebView2 环境/controller 创建失败时用
+// log.Printf 打 HRESULT，但 daemon 是 -H windowsgui 的 GUI 进程，stderr 没有
+// 任何去处——这就是「v3 嵌入失败」长期只有我加的那句笼统提示、查不到具体
+// HRESULT 的原因。init 里换掉 log 的默认 writer 即可接住。
+type panelLogWriter struct{}
+
+func (panelLogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\r\n")
+	if msg != "" {
+		logToDaemon("[webview2] " + msg)
+	}
+	return len(p), nil
+}
+
+func init() {
+	// 标准 log 包默认写 stderr，GUI 进程下不可见；改投 daemon.log。
+	// 前缀留空：logToDaemon 自己加时间戳与 [webview2] 标签。
+	log.SetFlags(0)
+	log.SetOutput(panelLogWriter{})
 }
 
 // SetPanelDark 面板手动选择深浅色时同步原生标题栏：DWM 深色属性可对活窗口
@@ -361,20 +391,38 @@ func SetPanelDark(on bool) {
 // wakeExistingPanel 已有面板窗口时唤醒并聚焦。用 FindWindow 按窗口类名查，
 // 跨进程同样有效——托盘的 daemon 进程与 drop panel CLI 是两个进程，
 // 进程内全局 panelHwnd 防不住跨进程重复打开。
+//
+// 要查两个类名：v3 自管窗口用 panelWndClassName，而 legacy 回退路径用
+// go-webview2 库自建的窗口（类名固定为 "webview"）。只查前者时，一旦 v3
+// 嵌入失败回退 legacy，后续每次打开都找不到已有窗口 → 窗口越开越多
+// （现象：每次打开或重启都会多出一个面板）。
 func wakeExistingPanel() bool {
-	cls, _ := windows.UTF16PtrFromString(panelWndClassName)
-	hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
-	if hwnd == 0 {
-		return false
+	for _, name := range []string{panelWndClassName, legacyPanelClassName} {
+		cls, _ := windows.UTF16PtrFromString(name)
+		hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
+		if hwnd == 0 {
+			continue
+		}
+		procShowWindow.Call(hwnd, 9 /*SW_RESTORE*/)
+		procSetForegroundWindow.Call(hwnd)
+		return true
 	}
-	procShowWindow.Call(hwnd, 9 /*SW_RESTORE*/)
-	procSetForegroundWindow.Call(hwnd)
-	return true
+	return false
 }
+
+// legacyPanelClassName 是 third_party/go-webview2 内部 RegisterClassExW 用的
+// 类名（库源码固定写死 "webview"）。legacy 面板靠它被 FindWindow 找到。
+const legacyPanelClassName = "webview"
 
 func openPanelLegacy(url string) error {
 	go func() {
 		runtime.LockOSThread()
+		// 单实例兜底：openPanelLegacy 有 5 个调用点（含 v3 失败/panic 回退），
+		// 其中一部分绕过了 OpenPanelWindow 的 panelMu。这里再查一次已有窗口，
+		// 避免回退路径重复建窗（否则窗口会越开越多）。
+		if wakeExistingPanel() {
+			return
+		}
 		lw, lh := panelLogicalSize()
 		scale := systemDpiScale()
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
@@ -442,6 +490,19 @@ type wndClassExW struct {
 // 所有装饰在显示前完成，杜绝白闪与图标丢失的时序窗口。
 func panelWindowMain(url string) {
 	runtime.LockOSThread()
+	// COM 必须在本线程初始化。go-webview2 的 edge 包在自己的 init() 里调过
+	// CoInitializeEx，但那是 Go runtime 的启动线程；面板窗口跑在 LockOSThread
+	// 锁定的另一个线程上，而 COM 的 STA 是线程级的。不补这一句，
+	// CreateCoreWebView2EnvironmentWithOptions 直接返回 CO_E_NOTINITIALIZED
+	// (0x800401F0)——这是 v3 嵌入长期失败的真根因（2026-10-21 靠 daemon.log
+	// 里的 HRESULT 定位，此前只有笼统提示，一直查不出）。
+	// COINIT_APARTMENTTHREADED = 2；S_FALSE(1) 表示本线程已初始化过，同样可用。
+	if r, _, _ := procCoInitializeEx.Call(0, 2); int32(r) < 0 {
+		logToDaemon(fmt.Sprintf("面板线程 CoInitializeEx 失败: 0x%08x，回退 legacy", uint32(r)))
+		openPanelLegacy(url)
+		return
+	}
+	defer procCoUninitialize.Call()
 	// 单实例：面板已打开 → 唤醒并聚焦，不创建第二个窗口
 	//（多窗口会与全局 webview 引用互相顶替，导致尺寸联动错乱）
 	if wakeExistingPanel() {
@@ -612,6 +673,12 @@ var (
 	procGetWindowRect   = user32.NewProc("GetWindowRect")
 	dwmapi              = windows.NewLazySystemDLL("dwmapi.dll")
 	procDwmSetWinAttr   = dwmapi.NewProc("DwmSetWindowAttribute")
+
+	// COM 初始化：面板线程必须在用 WebView2 之前自己 CoInitializeEx
+	//（STA 是线程级的，库的 init() 只覆盖了 Go 启动线程）。
+	ole32              = windows.NewLazySystemDLL("ole32.dll")
+	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
+	procCoUninitialize = ole32.NewProc("CoUninitialize")
 
 	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
