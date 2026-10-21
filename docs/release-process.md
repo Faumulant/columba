@@ -73,6 +73,35 @@ splits 是「完整包 + 每架构一个」并存。
 `core/` 一改（哪怕只改注释），AAR 与 APK 就落后了。发版前必须重新 bind + assemble，
 否则用户装到的手机端缺新功能。判断方法：比较 `core/**/*.go` 与 AAR 的 mtime。
 
+**APK 发布前必须实机验证。** 构建成功 ≠ 能装上跑起来。v0.1 的验证步骤（约 3 分钟）：
+
+```bash
+ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
+D="<adb devices 里的设备串>"
+APK="android/app/build/outputs/apk/release/app-arm64-v8a-release.apk"
+
+# 1. 安装（-r 覆盖升级，保留数据）
+"$ADB" -s "$D" install -r "$APK"
+
+# 2. 启动并确认进程存活（不闪退）
+"$ADB" -s "$D" shell am start -n com.faumulant.columba/.MainActivity
+sleep 6
+"$ADB" -s "$D" shell pidof com.faumulant.columba
+
+# 3. 确认无崩溃（注意看时间戳，别被历史崩溃误导）
+"$ADB" -s "$D" logcat -d | grep "FATAL EXCEPTION"
+
+# 4. 截图看界面（bash 里 /sdcard 会被路径转换，要写成 //sdcard）
+"$ADB" -s "$D" shell "screencap -p //sdcard/v.png"
+"$ADB" -s "$D" pull "//sdcard/v.png" tmp/v.png
+```
+
+**验证要点（v0.1 实测踩过）**：
+- `logcat` 里有历史崩溃日志，**必须核对时间戳**是否早于本次 `lastUpdateTime`
+- 中文测试内容**别用 bash 里的 curl 发**：bash 会把中文转成 `?`，
+  看起来像产品编码 bug（实测被误导过一次）。用 Python 的 urllib 或面板发送。
+- `adb shell` 里的 `/sdcard` 在 bash 下会被转成 Windows 路径，写 `//sdcard` 绕过。
+
 **SHA256 会由 GitHub 独立计算一次。** `gh release view --json assets` 里的
 `digest` 字段是 GitHub 自己算的，与本地 `SHA256SUMS.txt` 对比可确认上传无损。
 
