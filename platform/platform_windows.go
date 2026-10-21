@@ -1163,9 +1163,20 @@ func ClearAutostart() error {
 const firewallRuleName = "Columba"
 
 func AllowFirewall() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+	// 规则必须绑**监听端口的那个 exe**，不是调用本函数的 exe。
+	//
+	// 实测踩到的坑：`drop install` / `drop firewall` 都由 drop.exe 发起，
+	// 所以 os.Executable() 是 drop.exe；但真正监听 42707 的是 dropw.exe
+	//（无窗口 daemon）。规则绑到 drop.exe 上等于没加——对端照样连不进来，
+	// 而面板/日志都显示「规则已注册」，非常难查。
+	// helperExe() 返回同目录的 dropw.exe，正是需要的那个。
+	exe := helperExe()
+	if exe == "" {
+		var err error
+		exe, err = os.Executable()
+		if err != nil {
+			return err
+		}
 	}
 	// 1) 清掉本程序以前留下的**固定名**规则（历史上叫 Drop，现在叫 Columba）
 	for _, n := range []string{"Drop", firewallRuleName} {
@@ -1177,7 +1188,7 @@ func AllowFirewall() error {
 	// 留着既占规则表、又让用户以为还在生效。**不动**路径仍有效的规则——
 	// 那可能是用户有意保留的，删掉等于擅自撤销授权。
 	cleanupStaleDropwRules()
-	// 3) 加固定名规则，指向当前 exe
+	// 3) 加固定名规则，指向监听端口的 dropw.exe
 	out, err := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
 		"name="+firewallRuleName, "dir=in", "action=allow", "program="+exe, "enable=yes").CombinedOutput()
 	if err != nil {
