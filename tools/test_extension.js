@@ -48,8 +48,9 @@ function makeEnv(state) {
     },
   };
 
-  // 假 daemon：/api/state 返回预设；/api/select 记录切换
+  // 假 daemon：/api/state 返回预设；/api/select 记录切换；/api/send-url 记录媒体
   const selected = [];
+  const sentURLs = [];
   function handle(req) {
     if (req.path === "/api/state") {
       return { ok: true, data: { devices: state.devices, target: state.target } };
@@ -62,6 +63,10 @@ function makeEnv(state) {
     if (req.path === "/api/send-text") {
       return { ok: !!state.target, message: state.target ? "" : "未选择目标设备" };
     }
+    if (req.path === "/api/send-url") {
+      sentURLs.push(req.body);
+      return { ok: true };
+    }
     return { ok: false, message: "unknown" };
   }
 
@@ -69,7 +74,7 @@ function makeEnv(state) {
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(BG, "utf8"), sandbox, { filename: BG });
 
-  return { created, listeners, selected, sandbox };
+  return { created, listeners, selected, sentURLs, sandbox };
 }
 
 const tick = () => new Promise(r => setTimeout(r, 10));
@@ -100,13 +105,29 @@ async function run() {
     const ids = env.created.map(m => m.id);
     check("创建了根菜单", ids.includes("root"));
     check("根菜单标题带设备名", env.created.find(m => m.id === "root").title === "Drop → 我的手机");
-    check("五个动作项都在", ["page", "sel", "link", "img", "video"].every(i => ids.includes(i)));
+    check("文字类三项都在", ["page", "sel", "link"].every(i => ids.includes(i)));
+    check("媒体本体两项都在", ["img", "video"].every(i => ids.includes(i)));
+    check("「只发链接」备选也在", ["imgurl", "videourl"].every(i => ids.includes(i)));
     check("单设备不出现「发送到…」", !ids.includes("pick"));
     check("单设备不出现设备子项", !ids.some(i => String(i).startsWith("dev:")));
 
-    // 点「发送图片」→ 应调用 send-text
+    // 菜单文案不能说「发到某分类」，要说「发什么」（此处曾出现误解）
+    const titles = env.created.map(m => m.title || "");
+    check("文案用「此页面/此图片」而非「发送页面/发送图片」",
+      titles.includes("发送此页面") && titles.includes("发送此图片") && titles.includes("发送此视频"));
+    check("不再出现歧义文案「发送图片」", !titles.includes("发送图片"));
+
+    // 点「发送此图片」→ 应走 send-url（发本体，不是发链接）
     await env.listeners.clicked({ menuItemId: "img", srcUrl: "https://example.com/a.png" });
     await tick();
+    check("点图片走 send-url 而非 send-text", env.sentURLs.length === 1);
+    check("send-url 带上 kind=image", env.sentURLs[0] && env.sentURLs[0].kind === "image");
+    check("send-url 带上原始地址", env.sentURLs[0] && env.sentURLs[0].url === "https://example.com/a.png");
+
+    // 点「只发送图片链接」→ 应走 send-text（不发本体）
+    await env.listeners.clicked({ menuItemId: "imgurl", srcUrl: "https://example.com/b.png" });
+    await tick();
+    check("「只发链接」不触发 send-url", env.sentURLs.length === 1);
   }
 
   // 场景 2：多设备 —— 出现「发送到…」与设备子项，且离线有标注

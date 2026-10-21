@@ -232,6 +232,10 @@ func DeleteIDs(ids []string) (int, error) {
 // /api/state（每次都 Load 整份历史），delete 与轮询撞上是常态，而「删除历史」
 // 失败会让用户重复点击却看不到任何变化。故重试窗口按「跨过一个完整轮询周期」
 // 设计：200ms 起，指数退避到 1.2s，累计约 4 秒，远超面板 2 秒的轮询间隔。
+//
+// 重试上限从 6 提到 12（累计约 10 秒）：`go test ./...` 并行跑包时，
+// TestDeleteIDsRewriteIsAtomic 自己就带一个高频读者，加上其它包的 IO 压力，
+// 6 次偶尔不够（实测偶发失败约 1/10）。加长只是多等，不会改变正确性。
 func writeAtomic(p, content string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(p), filepath.Base(p)+"-*.tmp")
 	if err != nil {
@@ -249,7 +253,7 @@ func writeAtomic(p, content string) error {
 	for i := 0; ; i++ {
 		if err := os.Rename(tmp.Name(), p); err == nil {
 			return nil
-		} else if i >= 6 {
+		} else if i >= 12 {
 			return err
 		}
 		time.Sleep(wait)

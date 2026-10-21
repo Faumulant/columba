@@ -15,7 +15,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -444,6 +446,8 @@ func (s *Server) api(w http.ResponseWriter, req *http.Request) {
 		writeOK(w)
 	case req.URL.Path == "/api/send-files" && req.Method == http.MethodPost:
 		s.handleSendFiles(w, req)
+	case req.URL.Path == "/api/send-url" && req.Method == http.MethodPost:
+		s.handleSendURL(w, req)
 	case req.URL.Path == "/api/send-cancel" && req.Method == http.MethodPost:
 		s.handleSendCancel(w, req)
 	case req.URL.Path == "/api/send-text" && req.Method == http.MethodPost:
@@ -872,6 +876,139 @@ func (s *Server) targetAddr(targetID string) (transfer.Target, error) {
 	return transfer.Target{}, errors.New("目标设备不在线")
 }
 
+// handleSendURL 浏览器扩展右键「发送此图片/视频」：由 daemon 下载 URL 内容
+// 再走文件传输管线，接收端拿到的是**文件本体**而不是一串网址。
+//
+// 为什么下载放在 daemon 而不是扩展：IPC token 由 native-host 持有、从不进入
+// 扩展（有意的安全设计）。扩展只把 URL 交过来，凭据不出进程。
+// 顺带好处：Go 侧能流式下载，不受扩展内存与 Native Messaging 1MB 单消息上限约束。
+//
+// 限制：只接受 http/https。blob:/data: 是页面内的临时引用，跨进程取不到；
+// file: 更不行（扩展与 daemon 的权限边界）。这些情况明确报错，不静默失败。
+func (s *Server) handleSendURL(w http.ResponseWriter, req *http.Request) {
+	var in struct {
+		URL  string `json:"url"`
+		Kind string `json:"kind"` // image / video，仅用于命名兜底
+	}
+	if err := json.NewDecoder(io.LimitReader(req.Body, 8<<10)).Decode(&in); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	raw := strings.TrimSpace(in.URL)
+	if raw == "" {
+		http.Error(w, "URL 为空", http.StatusBadRequest)
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		http.Error(w, "只支持 http/https 地址（blob:/data: 无法跨进程下载）", http.StatusBadRequest)
+		return
+	}
+
+	// 与 send-files 同一套前置校验
+	s.cfgMu.Lock()
+	target := s.cfg.Target
+	s.cfgMu.Unlock()
+	if target == "" {
+		http.Error(w, "尚未选择目标设备", http.StatusBadRequest)
+		return
+	}
+	if !s.trust.Has(target) {
+		http.Error(w, "目标设备未配对", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// 有些站点对无 UA 的请求直接 403
+	dlReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Columba")
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(dlReq)
+	if err != nil {
+		http.Error(w, "下载失败: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("下载失败: HTTP %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	name := fileNameForURL(u, resp.Header.Get("Content-Type"), in.Kind)
+	spool, err := os.MkdirTemp("", "drop-url-")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(spool, name)
+	f, err := os.Create(dst)
+	if err != nil {
+		os.RemoveAll(spool)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	written, err := io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		os.RemoveAll(spool)
+		http.Error(w, "下载中断: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if written == 0 {
+		os.RemoveAll(spool)
+		http.Error(w, "下载内容为空", http.StatusBadGateway)
+		return
+	}
+
+	// 交给与面板拖拽完全相同的发送管线（互斥、进度、通知、历史都由它保证）
+	s.startSend(w, spool, []string{dst}, target)
+}
+
+// fileNameForURL 从 URL 路径推文件名；没有扩展名时按 Content-Type 补。
+// 扩展名对接收端很重要：手机端靠它决定能否「打开」以及归到哪个分类。
+func fileNameForURL(u *url.URL, contentType, kind string) string {
+	base := path.Base(u.Path)
+	if base == "" || base == "." || base == "/" {
+		base = kind
+		if base == "" {
+			base = "web-file"
+		}
+	}
+	if unescaped, err := url.PathUnescape(base); err == nil {
+		base = unescaped
+	}
+	if filepath.Ext(base) == "" {
+		ct := strings.TrimSpace(strings.Split(contentType, ";")[0])
+		ext := map[string]string{
+			"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+			"image/webp": ".webp", "image/svg+xml": ".svg", "image/bmp": ".bmp",
+			"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+			"audio/mpeg": ".mp3", "audio/ogg": ".ogg", "application/pdf": ".pdf",
+		}[strings.ToLower(ct)]
+		if ext == "" {
+			ext = ".bin"
+		}
+		base += ext
+	}
+	// 文件名会进对端磁盘，必须消毒（对端自报的 URL 不可信）
+	base = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`\/:*?"<>|`, r) {
+			return '_'
+		}
+		return r
+	}, base)
+	if len(base) > 120 {
+		ext := filepath.Ext(base)
+		base = base[:120-len(ext)] + ext
+	}
+	return base
+}
+
 // handleSendFiles 面板拖拽/选择的文件：先落到临时目录（保留原名），
 // 再走既有文件发送管线，后台完成后弹系统通知。
 func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
@@ -942,7 +1079,14 @@ func (s *Server) handleSendFiles(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "没有有效文件", http.StatusBadRequest)
 		return
 	}
+	s.startSend(w, spool, paths, target)
+}
 
+// startSend 发起一次后台发送：占互斥、起 goroutine、先应答。
+// 抽出来是因为两个入口（面板拖拽 send-files、浏览器扩展 send-url）必须走
+// 完全相同的互斥/进度/通知/历史逻辑，各写一份必然漂移。
+// spool 由本函数接管并在结束时删除。
+func (s *Server) startSend(w http.ResponseWriter, spool string, paths []string, target string) {
 	// 一次只允许一个面板发起的发送：/api/state 的 progress 只保留一条，
 	// 并发发送会互相覆盖，圆环数字对不上谁是谁。互斥在入队前判定，
 	// 保证「第二次点击」得到明确提示而不是静默串台。
