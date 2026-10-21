@@ -128,7 +128,7 @@ docs/               协议契约与发布流程
 ## 已知边界
 
 - **仅局域网**：不做中继，跨网段/跨 NAT 不通。
-- 正式版 Firefox 无法安装未签名扩展 → 用 Developer Edition 或篡改猴脚本版。
+- 正式版 Firefox 无法安装未签名扩展 → 用 Developer Edition（Chrome/Edge 走开发者模式加载即可）。
 - 断点续传未做：中断即整传重试（小文件成本可接受）。
 - macOS / iOS 未实现。
 

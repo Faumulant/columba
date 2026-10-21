@@ -39,82 +39,6 @@ const (
 	projectURL = "https://github.com/Faumulant/columba/releases/latest"
 )
 
-// userscriptTemplate 生成给篡改猴的脚本；token/端口在生成时烧入。
-const userscriptTemplate = `// ==UserScript==
-// @name         Columba 发送
-// @namespace    drop.local
-// @version      1.0.0
-// @description  划选文字 / 右键媒体 / 当前页面 → 一键发送到 Columba 设备
-// @match        *://*/*
-// @connect      127.0.0.1
-// @connect      localhost
-// @grant        GM_xmlhttpRequest
-// @grant        GM_registerMenuCommand
-// @run-at       document-end
-// @updateURL    http://127.0.0.1:__PORT__/userscript.user.js?t=__TOKEN__
-// @downloadURL  http://127.0.0.1:__PORT__/userscript.user.js?t=__TOKEN__
-// ==/UserScript==
-(function () {
-  const API = "http://127.0.0.1:__PORT__";
-  const TOKEN = "__TOKEN__";
-  function sendText(text) {
-    GM_xmlhttpRequest({
-      method: "POST",
-      url: API + "/api/send-text?t=" + TOKEN,
-      headers: { "Content-Type": "application/json" },
-      data: JSON.stringify({ text }),
-      onload: r => {
-        let ok = false, msg = r.statusText;
-        try { const d = JSON.parse(r.responseText); ok = !!d.ok; msg = d.message || ""; } catch (e) {}
-        flash(ok ? "✓ 已发送" : "✗ " + (msg || "发送失败"), !ok);
-      },
-      onerror: () => flash("✗ 无法连接 Drop 后台", true)
-    });
-  }
-  // 划选文字时浮现"发送到 Drop"按钮
-  let pill = null, lastSel = "";
-  function hide() { if (pill) { pill.remove(); pill = null; } }
-  document.addEventListener("mouseup", e => {
-    if (pill && pill.contains(e.target)) return;
-    setTimeout(() => {
-      const sel = (window.getSelection().toString() || "").trim();
-      if (!sel || sel === lastSel) { if (!sel) lastSel = ""; hide(); return; }
-      lastSel = sel; hide();
-      pill = document.createElement("div");
-      pill.textContent = "发送到 Columba";
-      pill.style.cssText = "position:fixed;z-index:2147483647;background:#2563eb;color:#fff;font-size:12px;padding:6px 12px;border-radius:99px;cursor:pointer;box-shadow:0 4px 14px rgba(37,99,235,.4);font-family:sans-serif;left:" + (e.clientX + 12) + "px;top:" + (e.clientY + 10) + "px";
-      pill.onclick = ev => { ev.stopPropagation(); sendText(sel); lastSel = ""; hide(); };
-      document.body.appendChild(pill);
-    }, 10);
-  });
-  function flash(text, err) {
-    const d = document.createElement("div");
-    d.textContent = text;
-    d.style.cssText = "position:fixed;z-index:2147483647;left:50%;top:18%;transform:translateX(-50%);background:" + (err ? "#7f1d1d" : "#111827") + ";color:#f9fafb;font-size:13px;padding:10px 16px;border-radius:12px;font-family:sans-serif;box-shadow:0 8px 26px rgba(0,0,0,.3)";
-    document.body.appendChild(d);
-    setTimeout(() => d.remove(), 2600);
-  }
-  // 右键媒体记忆：在图片/视频上右键后，可从菜单发送其地址
-  let lastMedia = null;
-  document.addEventListener("contextmenu", e => {
-    const t = e.target && e.target.closest && e.target.closest("img,video");
-    lastMedia = t ? (t.currentSrc || t.src || "") : null;
-  }, true);
-  if (typeof GM_registerMenuCommand === "function") {
-    GM_registerMenuCommand("Drop：发送当前页面", () => sendText(location.href));
-    GM_registerMenuCommand("Drop：发送选中文本/剪贴板", () => {
-      const sel = (window.getSelection().toString() || "").trim();
-      if (sel) return sendText(sel);
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        navigator.clipboard.readText().then(t => { if (t.trim()) sendText(t.trim()); else flash("剪贴板为空", true); }).catch(() => flash("无法读取剪贴板（需浏览器授权）", true));
-      } else flash("剪贴板为空", true);
-    });
-    GM_registerMenuCommand("Drop：发送右键的图片/视频", () => {
-      if (lastMedia) sendText(lastMedia); else flash("请先在图片或视频上右键", true);
-    });
-  }
-})();`
-
 // TouchPanel 记录面板活跃（/api/state 每次命中时调用）。
 func (s *Server) TouchPanel() {
 	s.probeMu.Lock()
@@ -271,13 +195,6 @@ func PanelHash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Server) userscript() string {
-	return strings.NewReplacer(
-		"__PORT__", fmt.Sprint(s.port),
-		"__TOKEN__", s.token,
-	).Replace(userscriptTemplate)
-}
-
 // Config 面板可修改的持久设置。
 type Config struct {
 	Target  string `json:"target"`
@@ -383,7 +300,7 @@ func New(id *identity.Identity, trust *identity.TrustStore, peers *discover.Trac
 	if raw, err := os.ReadFile(s.cfgPath); err == nil {
 		json.Unmarshal(raw, &s.cfg)
 	}
-	// token 持久化：重启后复用，面板/篡改猴脚本的地址永久有效
+	// token 持久化：重启后复用，面板地址与书签永久有效
 	if raw, err := os.ReadFile(filepath.Join(identity.AppDir(), "ipc.json")); err == nil {
 		var prev struct {
 			Token string `json:"token"`
@@ -420,7 +337,7 @@ func (s *Server) Target() string {
 }
 
 // Start 启动本地服务，返回面板访问 URL。
-// 优先绑定固定端口（篡改猴脚本的自动更新依赖稳定地址），被占时退随机端口。
+// 优先绑定固定端口（面板地址稳定、浏览器书签可用），被占时退随机端口。
 func (s *Server) Start(ctx context.Context) (string, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(ipcPreferredPort)))
 	if err != nil {
@@ -490,9 +407,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case req.URL.Path == "/favicon.ico":
 		w.Header().Set("Content-Type", "image/x-icon")
 		w.Write(faviconIco)
-	case req.URL.Path == "/userscript.user.js":
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-		w.Write([]byte(s.userscript()))
 	case req.URL.Path == "/panel":
 		// no-store：面板 HTML 编译进 exe，每次升级内容都变而 URL 不变
 		//（token 持久），禁缓存保证新面板必达 WebView2。
@@ -877,7 +791,6 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"firefox_registered": platform.FirefoxExtensionRegistered(),
 		"autostart":          platform.AutostartEnabled(),
 		"firefox_dir":        FirefoxExtDir(),
-		"userscript_url":     "/userscript.user.js?t=" + s.token,
 		"history":            history.ResolvePeerNames(history.Load(), s.displayNameOf),
 		"progress":           s.progressSnapshot(),
 	})

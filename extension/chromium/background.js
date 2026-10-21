@@ -1,5 +1,15 @@
 // Drop 浏览器扩展后台：右键菜单 → Native Messaging → 本机 daemon。
-// 发送目标使用面板中选中的设备；结果经系统通知反馈（daemon 弹出）。
+//
+// 菜单结构（菜单标题会显示当前目标设备，用户一眼能看出会发给谁）：
+//   Drop → 我的手机
+//     ├ 发送页面
+//     ├ 发送选中文本
+//     ├ 发送链接
+//     ├ 发送图片
+//     ├ 发送视频
+//     └ 发送到…  ▸  [设备A / 设备B / …]   ← 仅多设备时出现
+//
+// 结果经 badge 反馈（3 秒后清空），同时 daemon 会弹系统通知。
 
 const HOST = "drop.drop";
 let port = null;
@@ -40,25 +50,85 @@ function dispatch(req) {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: "page", title: "把页面发送到设备", contexts: ["page"] });
-  chrome.contextMenus.create({ id: "sel", title: "发送选中文本", contexts: ["selection"] });
-  chrome.contextMenus.create({ id: "link", title: "发送链接", contexts: ["link"] });
-  chrome.contextMenus.create({ id: "img", title: "发送图片", contexts: ["image"] });
-  chrome.contextMenus.create({ id: "video", title: "发送视频", contexts: ["video"] });
-});
+// ─── 菜单构建 ────────────────────────────────────────────────
+//
+// 每次设备列表/目标变化都整体重建：contextMenus 的 create/remove 是异步的，
+// 增量更新容易与 onInstalled 的首次创建撞车（同 id 重复创建会报错）。
+// 重建前先 removeAll，保证幂等。
+
+const MENU_ROOT = "root";
+
+async function rebuildMenus() {
+  // 取 state：devices + target
+  const st = await send({ path: "/api/state", method: "GET" });
+  const data = st && st.ok && st.data ? st.data : null;
+  const devices = (data && data.devices) || [];
+  const targetId = (data && data.target) || "";
+  const targetName = (devices.find(d => d.id === targetId) || {}).name || "（未选择设备）";
+
+  await chrome.contextMenus.removeAll();
+
+  // 根菜单标题带上目标设备名，右键时不用回想「现在发给谁」
+  const root = { id: MENU_ROOT, title: `Drop → ${targetName}`, contexts: ["page", "selection", "link", "image", "video"] };
+  chrome.contextMenus.create(root);
+
+  const items = [
+    { id: "page", title: "发送页面" },
+    { id: "sel", title: "发送选中文本" },
+    { id: "link", title: "发送链接" },
+    { id: "img", title: "发送图片" },
+    { id: "video", title: "发送视频" },
+  ];
+  for (const it of items) {
+    chrome.contextMenus.create({ ...it, parentId: MENU_ROOT, contexts: ["page", "selection", "link", "image", "video"] });
+  }
+
+  // 多设备才给「发送到…」子菜单：单设备时多一层点选纯属负担
+  if (devices.length > 1) {
+    chrome.contextMenus.create({ id: "pick", title: "发送到…", parentId: MENU_ROOT, contexts: ["page", "selection", "link", "image", "video"] });
+    for (const d of devices) {
+      chrome.contextMenus.create({
+        id: "dev:" + d.id,
+        title: d.name + (d.online ? "" : "（离线）"),
+        parentId: "pick",
+        contexts: ["page", "selection", "link", "image", "video"],
+      });
+    }
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => { rebuildMenus(); });
+chrome.runtime.onStartup.addListener(() => { rebuildMenus(); });
+
+// ─── 点击处理 ────────────────────────────────────────────────
+
+// pendingTarget 由「发送到…」子菜单临时指定；用完即清，避免污染后续点击。
+let pendingTarget = "";
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
+  const id = String(info.menuItemId);
+
+  // 设备子菜单：记下目标，等用户再点一次具体动作（菜单会关闭，所以这里
+  // 直接切换 daemon 的当前目标，并立刻重建菜单让标题跟着变）
+  if (id.startsWith("dev:")) {
+    const devId = id.slice(4);
+    await send({ path: "/api/select", method: "POST", body: { id: devId } });
+    await rebuildMenus();
+    badge("已切换");
+    return;
+  }
+
   let text = "";
-  let what = "";
-  switch (info.menuItemId) {
-    case "page":  text = info.pageUrl;  what = "页面"; break;
-    case "sel":   text = (info.selectionText || "").trim(); what = "选中文本"; break;
-    case "link":  text = info.linkUrl;  what = "链接"; break;
-    case "img":   text = info.srcUrl;   what = "图片"; break;
-    case "video": text = info.srcUrl || info.frameUrl || ""; what = "视频"; break;
+  switch (id) {
+    case "page":  text = info.pageUrl; break;
+    case "sel":   text = (info.selectionText || "").trim(); break;
+    case "link":  text = info.linkUrl; break;
+    case "img":   text = info.srcUrl; break;
+    case "video": text = info.srcUrl || info.frameUrl || ""; break;
+    default: return; // root / pick 等非动作项
   }
   if (!text) { badge("无内容"); return; }
+
   const resp = await send({ path: "/api/send-text", method: "POST", body: { text } });
   if (resp && resp.ok) badge("已发送");
   else badge("失败");
@@ -66,5 +136,6 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
 function badge(txt) {
   chrome.action.setBadgeText({ text: txt.slice(0, 4) });
+  chrome.action.setBadgeBackgroundColor({ color: txt === "失败" ? "#A85A4C" : "#1B1C1A" });
   setTimeout(() => chrome.action.setBadgeText({ text: "" }), 3000);
 }

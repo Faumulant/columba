@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Drop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "把网页里看到的内容（页面/选中文本/链接/图片/视频）发送到你的设备。需要 Drop 后台运行。",
   "permissions": ["contextMenus", "nativeMessaging"],
   "background": { "scripts": ["background.js"] },
+  "action": { "default_title": "Drop" },
   "browser_specific_settings": {
     "gecko": { "id": "drop@drop.local", "strict_min_version": "109.0" }
   }
