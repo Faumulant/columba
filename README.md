@@ -5,13 +5,25 @@
 没有账号、没有云、没有服务器：两端在同一局域网内直接建立 TLS 1.3 双向认证连接，
 文件不经任何第三方。桌面端是单个 exe（约 9.5 MB，无运行时依赖），手机端是一个 APK。
 
+## 下载
+
+**[→ Releases 页面](https://github.com/Faumulant/columba/releases/latest)**
+
+| 文件 | 说明 |
+|---|---|
+| `Columba-<版本>-setup.exe` | **推荐**。一键安装器，双击即装（无需管理员） |
+| `SHA256SUMS.txt` | 校验和，用于核对下载完整性 |
+
+> **安装包未做代码签名**，Windows SmartScreen 会提示「已保护你的电脑」。
+> 点「更多信息」→「仍要运行」即可。这不是病毒警告，是所有未签名新软件的通用提示。
+
 ## 现在的状态
 
 | 端 | 形态 | 状态 |
 |---|---|---|
 | Windows 桌面 | `drop.exe`（CLI）+ `dropw.exe`（后台 daemon + 托盘 + 管理面板） | 已用真实局域网验证 |
-| Android | `app-release.apk`（Compose 原生 UI，复用 Go 核心） | 已用真实设备验证 |
-| 浏览器扩展 | Firefox / Chromium（MV3），右键发送网页内容 | 已实现，待真机右键验收 |
+| Android | `app-release.apk`（Compose 原生 UI，复用 Go 核心） | 已用真实设备验证，**暂未提供下载** |
+| 浏览器扩展 | Firefox / Chromium（MV3），右键发送网页内容 | 已实现并验收 |
 
 功能覆盖：核心链路 / 配对与信任 / 系统集成 / 管理面板 / 浏览器扩展 /稳定性打磨 / 安卓端。后续按实际使用反馈迭代。
 

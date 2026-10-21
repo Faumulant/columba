@@ -59,16 +59,16 @@ draft 还没有正式 tag 指向，发布后才会变成 `.../releases/tag/v0.1`
 在**私有仓库**下返回 **404**。代码里 `if resp.StatusCode != http.StatusOK { return }`
 已静默跳过，实测：daemon 正常运行、`/api/state` 的 `latest` 为空、stderr 无报错。
 
-**含义**：仓库公开之前，更新提示功能实际不会生效——这是预期的，
-不是 bug。公开后（且发布了正式 release）自动开始工作。
+**公开后已复测**（2026-10-22）：同一 URL 返回 **200**，`tag_name = v0.1`，
+附件 `HTTP 200` 可下载。更新检查端到端验证：把 `Version` 临时改成 `0.0`
+编译一份，运行 15 秒后 `/api/state` 的 `latest` 变成 `0.1` —— 功能确实生效。
 
-## 发布（公开）前的检查清单
+## 发布（公开）后的检查清单
 
-- [ ] 仓库可见性改为 public（**不可逆**，需用户明确同意）
-- [ ] draft release 改为 Publish
-- [ ] 确认 `/releases/latest` 返回 200 且 `tag_name` 正确
-- [ ] 装一份旧版本，等 15 秒（`StartUpdateCheck` 启动后先 sleep 15s），
-      确认面板关于卡出现「有新版本 v…」提示
+- [x] 仓库可见性改为 public（2026-10-22 已完成）
+- [x] draft release 改为 Publish
+- [x] `/releases/latest` 返回 200 且 `tag_name` 正确
+- [x] 旧版本（0.0）能检测到新版本（`latest: 0.1`）
 - [ ] README 里的下载链接指向 releases 页
 
 ## 尚未做（发布前置）
