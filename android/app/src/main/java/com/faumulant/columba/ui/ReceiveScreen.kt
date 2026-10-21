@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Launch
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.outlined.Inbox
+
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -73,6 +74,7 @@ import com.faumulant.columba.Go
 import com.faumulant.columba.HistoryEntry
 import com.faumulant.columba.Receiver
 import kotlinx.coroutines.Dispatchers
+
 import kotlinx.coroutines.withContext
 
 // 接收页：顶部接收信标 + 商标斑鸠 / 五分类等宽 tabs / 记录列表（图片类带缩略图）
@@ -254,7 +256,10 @@ private fun EmptyState() {
                 modifier = Modifier.size(52.dp),
             )
             Spacer(Modifier.height(14.dp))
-            if (Receiver.running) {
+            // 只有「确定没在跑」才提示未运行。启动中（starting）按正常空态显示：
+            // 启动只要几百毫秒，专门显示一句「正在启动」对用户没有价值，反而多闪
+            // 一次；真正需要告知用户的只有失败——失败会退回 NotStarted 并弹一次错误。
+            if (Receiver.running || Receiver.starting) {
                 Text(
                     "还没有记录",
                     fontSize = 15.sp,
