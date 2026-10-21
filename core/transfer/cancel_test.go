@@ -80,7 +80,18 @@ func TestProgressReportsStartImmediately(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	recs := spy.snapshot()
+	// 首报在 progressReader 的 goroutine 里发出，Send 返回不代表它已经跑完——
+	// 传输极快时 stopLog() 关闭 done 通道甚至可能早于 report() 被调度。
+	// 直接快照会偶发拿到空列表（CI 上真实踩到过）。这里等它出现，带超时。
+	var recs []progressRec
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		recs = spy.snapshot()
+		if len(recs) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(recs) == 0 {
 		t.Fatal("传输应至少上报一次进度（首报 done=0），否则宿主端「传输中」条目永不出现")
 	}
@@ -116,16 +127,23 @@ func TestProgressAggregatesBatch(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	recs := spy.snapshot()
-	if len(recs) == 0 {
-		t.Fatal("多文件传输应上报进度")
-	}
-	// 只看发送侧：接收端也会经同一 ProgressHook 上报，dir="recv" 是单文件口径
+	// 同 TestProgressReportsStartImmediately：进度在 goroutine 里发，
+	// Send 返回不代表全部上报都到齐了。这里等「最后一条 done>=4」出现
+	// （即第二个文件的首报带上了已完成文件的字节），再断言。
 	var sendRecs []progressRec
-	for _, r := range recs {
-		if r.dir == "send" {
-			sendRecs = append(sendRecs, r)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sendRecs = sendRecs[:0]
+		for _, r := range spy.snapshot() {
+			// 只看发送侧：接收端也会经同一 ProgressHook 上报，dir="recv" 是单文件口径
+			if r.dir == "send" {
+				sendRecs = append(sendRecs, r)
+			}
 		}
+		if n := len(sendRecs); n > 0 && sendRecs[n-1].done >= 4 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if len(sendRecs) == 0 {
 		t.Fatal("应有发送侧进度上报")

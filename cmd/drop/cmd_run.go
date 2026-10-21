@@ -215,6 +215,16 @@ func cmdRun(args []string) error {
 	go s.StartProber(ctx)
 	go s.StartUpdateCheck(ctx)
 	go syncSendToLoop(ctx, trust)
+	// 扩展宿主清单自愈：RegisterNativeHost 原先只在 `drop install` 时跑一次，
+	// 之后程序换目录（构建目录 → 安装目录、或升级换了路径）manifest 里的
+	// "path" 就永久失效，浏览器扩展会一直报「无法连接宿主」，而没有任何机制
+	// 会自己修好它。这里启动时补一次——该函数每次完整重写清单+注册表，幂等，
+	// 失败也只是记一行日志（没装扩展的用户本就不需要它）。
+	go func() {
+		if err := platform.RegisterNativeHost(); err != nil {
+			fmt.Fprintln(os.Stderr, "扩展宿主清单刷新失败（不影响接收/发送）:", err)
+		}
+	}()
 
 	panelURL, err := s.Start(ctx)
 	if err != nil {

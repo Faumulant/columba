@@ -12,6 +12,7 @@ package mobileapi
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +24,13 @@ import (
 func TestTransferStartFiresForTinyFile(t *testing.T) {
 	base := t.TempDir()
 	l := &testListener{}
-	infoA, code := setupReceiver(t, filepath.Join(base, "a"), "A-Start", 42721, l)
+	// 端口必须与 mobileapi_test.go 里那些固定端口错开：同包内测试虽然串行，
+	// 但端口一旦重复，将来任何并行的改动都会立刻撞上（42721 曾被两个用例共用）。
+	const port = 42729
+	infoA, code := setupReceiver(t, filepath.Join(base, "a"), "A-Start", port, l)
 	defer StopReceiver()
 	defer StopDiscovery()
-	setupJoiner(t, filepath.Join(base, "b"), "B-Start", infoA.ID, "127.0.0.1:42721")
+	setupJoiner(t, filepath.Join(base, "b"), "B-Start", infoA.ID, "127.0.0.1:"+strconv.Itoa(port))
 	if _, err := PairJoin(code); err != nil {
 		t.Fatalf("PairJoin: %v", err)
 	}

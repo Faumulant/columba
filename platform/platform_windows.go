@@ -123,15 +123,38 @@ func psEncode(script string) string {
 }
 
 func runHiddenPowerShell(script string, timeout time.Duration) error {
+	_, err := runHiddenPowerShellCapture(script, timeout)
+	return err
+}
+
+// runHiddenPowerShellCapture 同 runHiddenPowerShell，但返回标准输出（去首尾空白）。
+// 用于需要读回结果的场合（如核对既有 .lnk 的目标是否仍有效）。
+//
+// 必须加 -OutputFormat Text：-EncodedCommand 下 PowerShell 默认把进度流
+// （COM 创建时的「正在准备使用模块」）序列化成 `#< CLIXML` 混进 stdout，
+// 真正的输出反而被它淹没（实测踩到：读回的内容是整段 CLIXML，比对必然失败）。
+func runHiddenPowerShellCapture(script string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script))
+	cmd := exec.CommandContext(ctx, "powershell",
+		"-NoProfile", "-NonInteractive", "-OutputFormat", "Text",
+		"-EncodedCommand", psEncode(script))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	s := strings.TrimSpace(string(out))
+	// 兜底：万一 CLIXML 仍混进来，只取最后一行的纯文本（脚本都用单行输出）
+	if strings.Contains(s, "#< CLIXML") {
+		lines := strings.Split(s, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if ln := strings.TrimSpace(lines[i]); ln != "" && !strings.HasPrefix(ln, "#<") && !strings.HasPrefix(ln, "<") {
+				return ln, nil
+			}
+		}
+	}
+	return s, nil
 }
 
 // OpenPath 用系统默认方式打开文件/目录。
@@ -260,20 +283,26 @@ if (Test-Path $lnk) { Remove-Item $lnk -Force }`
 	_ = runHiddenPowerShell(script, 20*time.Second)
 }
 
-// EnsureSendToLink 为一台已配对设备创建"发送到"快捷方式（已存在则跳过）。
+// EnsureSendToLink 为一台已配对设备创建"发送到"快捷方式。
 // 目标指向无控制台的伴生 exe，右键发送不闪黑窗。
+//
+// 已存在时不是简单跳过，而是**校验并修复目标**：程序换目录（构建目录 → 安装目录、
+// 或用户自己挪了位置）后，旧 .lnk 仍指着失效路径，右键「发送到」点了毫无反应，
+// 而且没有任何机制会自己修好它。这里每次同步都核对一次目标 exe 是否与当前一致，
+// 不一致就重建——成本只是读一个 .lnk，却能让「换目录 / 升级」自愈。
 func EnsureSendToLink(display, deviceID string) error {
 	name := filepath.Join(sendToDir(), sanitizeFileName(display)+".lnk")
 	// 消毒后仍兜底校验：目标必须位于 SendTo 目录内
 	if dir := filepath.Dir(name); !strings.EqualFold(dir, filepath.Clean(sendToDir())) {
 		return fmt.Errorf("非法的快捷方式路径 %q", name)
 	}
-	if _, err := os.Stat(name); err == nil {
-		return nil
-	}
 	exe := helperExe()
 	if exe == "" {
 		exe, _ = os.Executable()
+	}
+	// 已存在且目标正确（且参数里的设备 ID 也没变）就跳过
+	if _, err := os.Stat(name); err == nil && sendToLinkMatches(name, exe, deviceID) {
+		return nil
 	}
 	script := `
 $ws = New-Object -ComObject WScript.Shell
@@ -284,6 +313,22 @@ $s.WindowStyle = 7
 $s.Description = 'Drop'
 $s.Save()`
 	return runHiddenPowerShell(script, 20*time.Second)
+}
+
+// sendToLinkMatches 检查既有 .lnk 的目标与参数是否仍指向当前 exe / 该设备。
+// 用 PowerShell 读（创建也走它，避免引入 COM 直调的另一套实现）。
+// 任何读取失败都按「不匹配」处理 → 走重建路径，宁可重写一次也不要留坏链接。
+func sendToLinkMatches(lnk, wantExe, wantDeviceID string) bool {
+	script := `
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut('` + psQuote(lnk) + `')
+Write-Output ($s.TargetPath + "|" + $s.Arguments)`
+	out, err := runHiddenPowerShellCapture(script, 10*time.Second)
+	if err != nil {
+		return false
+	}
+	want := wantExe + `|sendto --to ` + wantDeviceID
+	return strings.EqualFold(strings.TrimSpace(out), want)
 }
 
 // RemoveSendToLink 移除设备的"发送到"快捷方式。
