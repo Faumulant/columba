@@ -52,6 +52,13 @@ input,textarea{font-family:inherit;color:var(--txt);background:transparent}
 
 /* ===== 顶部条：设备选择 ===== */
 .topbar{height:58px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid var(--hairline);background:var(--bg)}
+/* 传输进度条：顶栏下方一条细条，仅传输中显示 */
+.xfer{padding:8px 14px 9px;border-bottom:1px solid var(--hairline);background:var(--bg)}
+.xfer-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.xfer-name{font-size:12px;color:var(--sub);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xfer-pct{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.xfer-bar{height:3px;border-radius:2px;background:var(--line-2);overflow:hidden}
+.xfer-bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:2px;transition:width .3s linear}
 .topflex{flex:1}
 .brand{font-family:"Caveat",cursive;font-size:20px;color:var(--faint);transform:rotate(-3deg);padding:0 4px;letter-spacing:.5px}
 .dev{position:relative;width:200px}
@@ -205,6 +212,11 @@ input.codein:focus{border-color:var(--sub)}
     <div class="dev-menu" id="devMenu"></div>
   </div>
   <span class="topflex"></span><span class="brand">columba</span>
+</div>
+<!-- 传输进度：仅在有进行中传输时显示（/api/state 的 progress 字段） -->
+<div class="xfer" id="xfer" hidden>
+  <div class="xfer-top"><span class="xfer-name" id="xferName"></span><span class="xfer-pct" id="xferPct"></span></div>
+  <div class="xfer-bar"><i id="xferFill"></i></div>
 </div>
 <div class="app">
   <div class="side" id="side">
@@ -735,12 +747,27 @@ window.addEventListener("drop", e => {
 /* 状态轮询：数据变化且未在交互时才重绘 */
 const lastSig = {v: "", dev: ""};
 let renderKey = "";
+// applyProgress 传输进度条：state 里 progress 为 null 时整条隐藏。
+// 单独更新，不进 render() —— 进度每 3 秒变一次，重绘整个列表会闪烁。
+function applyProgress(p) {
+  const box = document.getElementById("xfer");
+  if (!box) return;
+  if (!p) { box.hidden = true; return; }
+  box.hidden = false;
+  const dir = p.dir === "recv" ? "接收" : "发送";
+  document.getElementById("xferName").textContent =
+    dir + " " + (p.name || "") + (p.peer ? " · " + p.peer : "");
+  document.getElementById("xferPct").textContent = (p.pct || 0) + "%";
+  document.getElementById("xferFill").style.width = (p.pct || 0) + "%";
+}
+
 function refresh() {
   api("state").then(r => r.json()).then(st => {
     S = st;
     const tdev = (S.devices || []).find(d => d.id === S.target);
     document.getElementById("devDot").className = "dot " + (tdev && tdev.online ? "on" : "off");
     document.getElementById("devName").textContent = targetName();
+    applyProgress(S.progress);
     // 设备在线状态不参与整页重绘的判定：列表内容只来自历史记录，
     // 在线抖动只影响顶栏圆点（上面已直接更新），避免无谓的整页闪烁
     // 设备列表变化（移除/备注/改名同步）：设置视图的设备管理卡需刷新，

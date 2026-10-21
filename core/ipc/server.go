@@ -315,7 +315,53 @@ type Server struct {
 	latestTag string    // GitHub 上比当前版本新的 tag（无/未知 = 空串）
 	panelAt   time.Time // 最近一次面板访问
 
+	// 当前传输进度：由 transfer.ProgressHook 写入、/api/state 下发、面板显示。
+	// 只保留「最近一次仍在进行」的那一条；完成/失败时由完成事件清空。
+	progMu sync.Mutex
+	prog   *transferProgress
+
 	OnShutdown func() // daemon 收到关闭指令时回调（启动器接线到退出流程）
+}
+
+// transferProgress 一条进行中的传输。
+type transferProgress struct {
+	Dir   string `json:"dir"` // send / recv
+	Peer  string `json:"peer"`
+	Name  string `json:"name"`
+	Done  int64  `json:"done"`
+	Total int64  `json:"total"`
+	Pct   int    `json:"pct"` // 0-100，面板直接用
+}
+
+// SetProgress 由 daemon 把 transfer.ProgressHook 接到这里：记录当前进度供面板读取。
+func (s *Server) SetProgress(dir, peer, name string, done, total int64) {
+	pct := 0
+	if total > 0 {
+		pct = int(done * 100 / total)
+		if pct > 100 {
+			pct = 100
+		}
+	}
+	s.progMu.Lock()
+	s.prog = &transferProgress{Dir: dir, Peer: peer, Name: name, Done: done, Total: total, Pct: pct}
+	s.progMu.Unlock()
+}
+
+// ClearProgress 传输结束（完成或失败）时清空，面板据此隐藏进度条。
+func (s *Server) ClearProgress() {
+	s.progMu.Lock()
+	s.prog = nil
+	s.progMu.Unlock()
+}
+
+func (s *Server) progressSnapshot() *transferProgress {
+	s.progMu.Lock()
+	defer s.progMu.Unlock()
+	if s.prog == nil {
+		return nil
+	}
+	cp := *s.prog
+	return &cp
 }
 
 // New 创建服务（读取配置、生成 token），随后 SetReceiver 并 Start。
@@ -831,6 +877,7 @@ func (s *Server) handleState(w http.ResponseWriter, req *http.Request) {
 		"firefox_dir":        FirefoxExtDir(),
 		"userscript_url":     "/userscript.user.js?t=" + s.token,
 		"history":            history.Load(),
+		"progress":           s.progressSnapshot(),
 	})
 }
 
@@ -853,17 +900,42 @@ func (s *Server) onlineSet() map[string]bool {
 	return online
 }
 
+// displayNameOf 目标设备在界面上的显示名：优先信任库（备注名 > 对方自报名），
+// 找不到时回退到宣告里的自报名。
+// 为什么不在 Target.Name 直接用 Announce.Name：宣告名是对方「此刻」的自报名
+// （手机端未改名时就是 localhost），而面板/历史显示的是信任库解析后的名字
+// （如 示例设备）。两者不一致会让进度条显示 localhost、历史却显示 示例设备。
+func (s *Server) displayNameOf(id string) string {
+	key := protocol.NormalizeID(id)
+	for _, p := range s.trust.List() {
+		if protocol.NormalizeID(p.ID) == key {
+			if n := p.DisplayName(); n != "" {
+				return n
+			}
+		}
+	}
+	return ""
+}
+
 // targetAddr 找到目标设备的当前地址：缓存直连 → 宣告 → 探测。
 func (s *Server) targetAddr(targetID string) (transfer.Target, error) {
 	key := protocol.NormalizeID(targetID)
+	name := s.displayNameOf(key)
 	if t, ok := transfer.CachedTarget(s.id, key); ok {
+		if name != "" {
+			t.Name = name
+		}
 		return t, nil
 	}
 	for _, info := range s.peers.Snapshot() {
 		if protocol.NormalizeID(info.Announce.ID) == key {
+			n := name
+			if n == "" {
+				n = info.Announce.Name
+			}
 			t := transfer.Target{
 				Addr: net.JoinHostPort(info.IP, fmt.Sprint(info.Announce.Port)),
-				ID:   info.Announce.ID, Name: info.Announce.Name,
+				ID:   info.Announce.ID, Name: n,
 			}
 			transfer.UpdateIPCache(key, t.Addr)
 			return t, nil
@@ -875,6 +947,9 @@ func (s *Server) targetAddr(targetID string) (transfer.Target, error) {
 	}
 	for _, t := range found {
 		if protocol.NormalizeID(t.ID) == key {
+			if name != "" {
+				t.Name = name
+			}
 			transfer.UpdateIPCache(key, t.Addr)
 			return t, nil
 		}

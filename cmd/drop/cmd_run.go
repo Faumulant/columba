@@ -178,6 +178,8 @@ func cmdRun(args []string) error {
 	//（双实例时单播宣告只投递给最后绑定者，UI 跟踪实例会饿死）
 	recv.SetAnnouncer(disc)
 	s.NotifyFile = func(dir, peer, name string) {
+		// 传输完成：清掉面板进度条（成功与失败都走这里）
+		s.ClearProgress()
 		if dir == "send" {
 			// OpenURL：点通知本体打开管理面板（此前点了没反应）
 			platform.Notify(platform.Notif{
@@ -195,7 +197,12 @@ func cmdRun(args []string) error {
 		}
 	}
 	s.NotifyErr = func(title, msg string) {
+		s.ClearProgress()
 		platform.Notify(platform.Notif{Title: title, Body: msg, OpenURL: "drop:panel"})
+	}
+	// 面板行内进度：ProgressHook 已在 transfer 内按 800ms 节流
+	transfer.ProgressHook = func(dir, peer, name string, done, total int64) {
+		s.SetProgress(dir, peer, name, done, total)
 	}
 	s.OnDeviceRemoved = func(display string) { platform.RemoveSendToLink(display) }
 
