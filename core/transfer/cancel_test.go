@@ -70,13 +70,12 @@ func TestProgressReportsStartImmediately(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "tiny.txt")
 	must(t, os.WriteFile(src, []byte("hi"), 0o600), "写源文件")
 
+	// Target.ID 用于 pin 对端证书指纹，必须是接收端的 ID（不是发送方自己的）
 	target := Target{
 		Addr: h.srv.Listener.Addr().String(),
-		ID:   h.sender.ID(), // 接收端 pin 的正是发送方？不——见下方注释
+		ID:   fingerprintOf(h),
 		Name: testPeerName,
 	}
-	// Target.ID 用于 pin 对端证书指纹，必须是接收端的 ID。
-	target.ID = fingerprintOf(h)
 	if _, err := Send(context.Background(), h.sender, target, []string{src}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}

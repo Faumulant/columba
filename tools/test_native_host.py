@@ -1,7 +1,14 @@
 import json, struct, subprocess, os, sys
 
-# 模拟浏览器：以 Native Messaging 协议与 dropw.exe 通信
-proc = subprocess.Popen([r'<仓库>\dropw.exe'],
+# 模拟浏览器：以 Native Messaging 协议与 dropw.exe 通信。
+# 用法：python tools/test_native_host.py [dropw.exe 路径]
+# 不给路径时按「与本脚本同级的仓库根目录」推断，避免把本机绝对路径写进仓库。
+DEFAULT_EXE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dropw.exe")
+exe = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_EXE
+if not os.path.exists(exe):
+    sys.exit(f"找不到 {exe}：先构建，或把 dropw.exe 路径作为参数传入")
+
+proc = subprocess.Popen([exe],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
 def send(req):
@@ -20,10 +27,14 @@ r2 = send({'path': '/api/send-text', 'method': 'POST',
            'body': {'text': '来自浏览器扩展的测试消息'}})
 print('send-text ok:', r2['ok'], '| message:', r2.get('data', {}).get('message', r2.get('message', ''))[:50])
 
-# 3) 选择目标为手机后再发（手机不在线 → 结构化错误，链路已验证）
-r3 = send({'path': '/api/select', 'method': 'POST',
-           'body': {'id': '<设备指纹前缀>B584EE8664EE2CE836AED64688B6ED365DE9B87E1924959093262CA1'}})
-print('select ok:', r3['ok'])
+# 3) 选一个已配对设备作目标（取设备列表第一个，不写死任何真实指纹）
+devices = r1['data']['devices']
+if devices:
+    r3 = send({'path': '/api/select', 'method': 'POST',
+               'body': {'id': devices[0]['id']}})
+    print('select ok:', r3['ok'])
+else:
+    print('select skipped: 没有已配对设备')
 
 proc.stdin.close()
 proc.wait(timeout=5)

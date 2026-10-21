@@ -1,14 +1,26 @@
+# ─── 构建产物（本机生成，不入库） ───────────────────────────
 /drop
 /drop.exe
 /dropw.exe
 /dropw*.exe
 /drop-linux-*
-*.test
-*.local
-*.exe~
-tmp/
-dist/
-tmp_*.txt
-/tools/jdk-21/
-tmp_*.log
+/dist/
 /paneltest*.exe
+*.test
+*.exe~
+
+# 安卓构建产物：AAR 由 gomobile bind 本地生成（14MB），APK 与 build 目录更大，
+# 都不该进仓库。此前只忽略了 app/build，build/ 与 app/libs/ 是漏的——
+# libs/ 里那 14MB 的 mobileapi.aar 一旦误提交就是永久体积负担。
+/android/build/
+/android/app/build/
+/android/app/libs/
+/android/.gradle/
+/android/local.properties
+/android/.idea/
+
+# 本机专用
+/tools/jdk-21/
+*.local
+tmp/
+tmp_*

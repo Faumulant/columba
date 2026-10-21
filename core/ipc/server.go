@@ -451,12 +451,6 @@ func (s *Server) saveIPC() error {
 	return os.WriteFile(filepath.Join(identity.AppDir(), "ipc.json"), b, 0o600)
 }
 
-func (s *Server) loadConfig() {
-	if raw, err := os.ReadFile(s.cfgPath); err == nil {
-		json.Unmarshal(raw, &s.cfg)
-	}
-}
-
 func (s *Server) saveConfig() {
 	b, _ := json.MarshalIndent(s.cfg, "", "  ")
 	os.WriteFile(s.cfgPath, b, 0o600)
