@@ -107,41 +107,54 @@ async function run() {
   }
 
   // 场景 2：按右键位置决定发什么（核心设计）
+  //
+  // 实际只有两种结果：发文件本体 / 发一段文字。文字来源有优先级
+  //（选中文字 > 链接 > 页面地址），但代码是同一行——不必测三条分支，
+  // 只需验证优先级与「取到了对的字段」。
   {
     console.log("按位置分派：");
     const env = makeEnv({ devices: [{ id: "AAA", name: "手机", online: true }], target: "AAA" });
     env.listeners.installed();
     await tick();
 
-    // 2a) 空白处 → 发页面地址
+    // 空白处 → 页面地址
     await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/page" });
     await tick();
     check("空白处发页面地址", env.sentTexts.at(-1) === "https://a.com/page");
 
-    // 2b) 选中文字 → 发文字（优先于页面）
+    // 选中文字 → 优先于页面
     await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/page", selectionText: "  选中的字  " });
     await tick();
-    check("选中文字发文字（且 trim）", env.sentTexts.at(-1) === "选中的字");
+    check("选中文字优先（且 trim）", env.sentTexts.at(-1) === "选中的字");
 
-    // 2c) 链接 → 发链接
+    // 链接 → 优先于页面，但让位于选中文字
     await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", linkUrl: "https://a.com/l" });
     await tick();
-    check("链接发链接地址", env.sentTexts.at(-1) === "https://a.com/l");
+    check("链接优先于页面地址", env.sentTexts.at(-1) === "https://a.com/l");
 
-    // 2d) 图片 → 下载本体（走 send-url，不发链接）
+    await env.listeners.clicked({
+      menuItemId: "act", pageUrl: "https://a.com/p",
+      linkUrl: "https://a.com/l", selectionText: "文字",
+    });
+    await tick();
+    check("选中文字优先于链接", env.sentTexts.at(-1) === "文字");
+
+    // 图片 → 下载本体（走 send-url，不发文字）
     const beforeURLs = env.sentURLs.length;
+    const beforeTexts = env.sentTexts.length;
     await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "image", srcUrl: "https://a.com/cat.png" });
     await tick();
     check("图片走 send-url 发本体", env.sentURLs.length === beforeURLs + 1);
     check("send-url 带 kind=image", env.sentURLs.at(-1).kind === "image");
     check("send-url 带原始地址", env.sentURLs.at(-1).url === "https://a.com/cat.png");
+    check("成功时不再额外发文字", env.sentTexts.length === beforeTexts);
 
-    // 2e) 视频 → 同样走本体
+    // 视频 → 同样走本体
     await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "video", srcUrl: "https://a.com/v.mp4" });
     await tick();
     check("视频走 send-url 发本体", env.sentURLs.at(-1).url === "https://a.com/v.mp4");
 
-    // 2f) 媒体上右键但同时有选中文字 → 媒体优先（在图上右键是最明确的手势）
+    // 媒体上右键同时有选中文字 → 媒体优先
     const before2 = env.sentURLs.length;
     await env.listeners.clicked({
       menuItemId: "act", pageUrl: "https://a.com/p",

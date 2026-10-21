@@ -6,18 +6,20 @@
 // 同一组 contexts 上，结果右键一张图片会同时冒出「发送此页面」「发送此图片」
 // 「只发送图片链接」等一堆项——用户分不清「动作」与「选择器」的区别。
 //
-// 现在改为**单一动作项 + 由右键位置决定发什么**：
+// 现在只有两项：
 //
 //   Drop → 我的手机
-//     └ 发送此图片            ← 文字随右键对象变化：此页面/此选中内容/此链接/此图片/此视频
+//     ├ 发送此内容
 //     └ 发送到…  ▸  [设备A ● / 设备B（离线）]   ← 仅多设备时出现
 //
+// 点「发送此内容」后由右键位置决定发什么。实际只有**两种**结果：
+//   ① 右键在图片/视频上 → 发文件本体（抓不到就退回发它的地址）
+//   ② 其余一切          → 发一段文字（选中文字 > 链接地址 > 页面地址）
+//
+// ② 里那三种「文字」的代码完全一样，只是取的字段不同——早先拆成三条分支
+// 是把简单事情说复杂了，已合并。
+//
 // 原则：右键位置已经表达了意图，不该再让用户选一次。
-//   · 有选中文字            → 发文字
-//   · 右键在图片/视频上      → 下载本体发文件；**抓不到就自动退回发链接**
-//   · 右键在链接上           → 发链接地址
-//   · 空白处                → 发页面地址
-// 用户永远只需要点一次，且不需要判断「我该选哪项」。
 
 const HOST = "drop.drop";
 
@@ -155,46 +157,34 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
 // handleSend 由右键位置决定发什么——这是本设计的核心，用户不需要选。
 //
-// 优先级：媒体 > 选中文字 > 链接 > 页面。
-// 媒体放最前是因为「在图片上右键」是最明确的手势；而 Chrome 在图片上右键时
-// 也可能带 selectionText（图注被选中），那种情况用户更可能想要图片。
+// 实际上只有**两种**结果，早先把它们拆成四条分支是把简单事情说复杂了：
+//   ① 右键在图片/视频上 → 发文件本体（抓不到就退回发它的地址）
+//   ② 其余一切         → 发一段文字
+//
+// ② 里「选中文字 / 链接地址 / 页面地址」的代码完全相同，只是取的字段不同，
+// 所以合成一个 `textToSend` 就够了——没必要为「同一件事、不同来源」写三条分支。
+// 取哪个字段有优先级：选中文字 > 链接 > 页面地址。这是浏览器右键的语义决定的
+// （你在链接上右键时 selectionText 通常为空；选中文字时 linkUrl 也可能有值，
+// 但用户此刻的注意力在选中的字上）。
 async function handleSend(info) {
-  // 1) 媒体本体（抓不到就自动退回发链接，不给用户报错）
+  // ① 媒体本体（抓不到就自动退回发它的地址，不给用户报错）
   const mediaUrl = info.srcUrl;
   if (mediaUrl && (info.mediaType === "image" || info.mediaType === "video" || info.mediaType === "audio")) {
     if (/^https?:/i.test(mediaUrl)) {
       badge("下载中");
       const r = await sendFile(mediaUrl, info.mediaType);
       if (r.ok) { badge("已发送"); return; }
-      // 抓取失败：自动退回发链接。用户要的是「把这个东西发过去」，
-      // 退一步发地址仍然满足大部分场景，比直接失败好。
+      // 抓取失败：退一步发地址仍满足大部分场景，比直接失败好
       console.warn("Drop: 媒体本体抓取失败，改为发送链接：", r.message);
-      const fb = await sendText(mediaUrl);
-      badge(fb ? "已发链接" : "失败");
-      return;
     }
-    // blob:/data: 是页面内引用，daemon 取不到 → 直接发链接（虽然是临时地址，
-    // 但至少让用户知道发生了什么，而不是静默失败）
-    const fb = await sendText(mediaUrl);
-    badge(fb ? "已发链接" : "失败");
+    // blob:/data: 是页面内引用，daemon 取不到，也走这里
+    badge((await sendText(mediaUrl)) ? "已发链接" : "失败");
     return;
   }
 
-  // 2) 选中文字
-  const sel = (info.selectionText || "").trim();
-  if (sel) {
-    badge((await sendText(sel)) ? "已发送" : "失败");
-    return;
-  }
-
-  // 3) 链接
-  if (info.linkUrl) {
-    badge((await sendText(info.linkUrl)) ? "已发送" : "失败");
-    return;
-  }
-
-  // 4) 页面地址
-  badge((await sendText(info.pageUrl || "")) ? "已发送" : "失败");
+  // ② 其余：发文字
+  const text = (info.selectionText || "").trim() || info.linkUrl || info.pageUrl || "";
+  badge((await sendText(text)) ? "已发送" : "失败");
 }
 
 async function sendText(text) {
