@@ -11,6 +11,20 @@ import (
 	"drop/platform"
 )
 
+// cmdFirewall —— 只注册防火墙入站规则（需要管理员），供安装器单独提权调用。
+//
+// 为什么拆出独立命令：安装器整体不提权（提权后解压会撞上用户机器上的
+// 8.3 短名路径问题，见 installer/columba.iss 文件头），但防火墙规则必须管理员。
+// 于是安装器在最后单独 runas 调这一个命令，用户只需为这一小步点一次 UAC。
+func cmdFirewall() error {
+	exe, _ := os.Executable()
+	if err := platform.AllowFirewall(); err != nil {
+		return fmt.Errorf("注册防火墙规则失败（需要管理员权限）: %w", err)
+	}
+	fmt.Println("✓ 防火墙入站规则已注册：" + exe)
+	return nil
+}
+
 // drop install —— 一次性系统安装。防火墙规则需要管理员权限，
 // 其余（drop: 协议、开机自启）为当前用户级。
 func cmdInstall() error {

@@ -1154,26 +1154,67 @@ func ClearAutostart() error {
 
 // --- 防火墙（需要管理员权限） ---
 
+// firewallRuleName 本程序注册的入站规则名。用固定名而不是 exe 名：
+// Windows 在程序首次监听端口时会弹「允许访问」并自动建一条**以 exe 名命名、
+// 按 exe 路径绑定**的规则（实测用户机器上累积了 6 条 dropw.exe 规则，
+// 对应 TEMP / Columba / Programs\Columba 三个路径）。程序一换目录，旧规则
+// 就指向不存在的路径且不会自动失效，于是又弹一次窗——
+// 用户每次都要多点两下。用固定名 + 每次覆盖，规则只留一条。
+const firewallRuleName = "Columba"
+
 func AllowFirewall() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Drop").Run()
+	// 1) 清掉本程序以前留下的**固定名**规则（历史上叫 Drop，现在叫 Columba）
+	for _, n := range []string{"Drop", firewallRuleName} {
+		exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+n).Run()
+	}
+	// 2) 清掉 Windows 自动生成、且已指向失效路径的 dropw 规则。
+	//
+	// 只删「程序路径已不存在」的：那些必然是历史残留（本程序换过目录），
+	// 留着既占规则表、又让用户以为还在生效。**不动**路径仍有效的规则——
+	// 那可能是用户有意保留的，删掉等于擅自撤销授权。
+	cleanupStaleDropwRules()
+	// 3) 加固定名规则，指向当前 exe
 	out, err := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
-		"name=Drop", "dir=in", "action=allow", "program="+exe, "enable=yes").CombinedOutput()
+		"name="+firewallRuleName, "dir=in", "action=allow", "program="+exe, "enable=yes").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
+// cleanupStaleDropwRules 删除 DisplayName 形如 "TCP Query User{...}...\dropw.exe"
+// 且其 Program 路径已不存在的入站规则。尽力而为，失败不影响主流程。
+//
+// 用 netsh 而不是 Win32 API：本文件其余网络操作都走 netsh（见 AllowFirewall），
+// 保持单一实现路径；这里只需按名字删，不需要查询结构化信息。
+func cleanupStaleDropwRules() {
+	// netsh 能按 program 精确过滤，但拿不到「路径是否存在」；先用 PowerShell 枚举
+	// 出失效规则的 Name，再交给 netsh 删。PowerShell 已在别处用于快捷方式操作
+	//（见 EnsureSendToLink），不是新引入的依赖。
+	const ps = `$ErrorActionPreference='SilentlyContinue'
+Get-NetFirewallRule -Direction Inbound | Where-Object {
+  $_.DisplayName -like '*dropw.exe*' -and $_.DisplayName -notlike 'Columba*'
+} | ForEach-Object {
+  $prog = (Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $_).Program
+  if ($prog -and -not (Test-Path $prog)) { $_.Name }
+} | ForEach-Object { netsh advfirewall firewall delete rule name="$_" | Out-Null }`
+	_ = runHiddenPowerShell(ps, 20*time.Second)
+}
+
 func RemoveFirewall() error {
-	out, err := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Drop").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	var firstErr error
+	for _, n := range []string{"Drop", firewallRuleName} {
+		out, err := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+n).CombinedOutput()
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
-	return nil
+	cleanupStaleDropwRules()
+	return firstErr
 }
 
 // --- 托盘 ---
