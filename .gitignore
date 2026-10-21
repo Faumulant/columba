@@ -24,3 +24,12 @@
 *.local
 tmp/
 tmp_*
+
+# 安装器构建产物
+/installer/dist/
+
+# 本地笔记（不入库）
+notes/
+
+# 本地笔记（不入库）
+notes/
