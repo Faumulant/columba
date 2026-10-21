@@ -10,9 +10,13 @@ type Action struct {
 
 // Notif 一条系统通知。
 type Notif struct {
-	Title   string
-	Body    string
+	Title string
+	Body  string
+	// Actions 通知上的按钮。为空时点击通知本体走 OpenURL（若有）。
 	Actions []Action
+	// OpenURL 点击通知本体（非按钮）时的目标，通常传 drop:panel 打开管理面板。
+	// 空表示点击无动作（纯告知类通知）。
+	OpenURL string
 }
 
 // TrayItem 托盘菜单项。

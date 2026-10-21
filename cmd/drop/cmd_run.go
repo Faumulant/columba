@@ -167,8 +167,9 @@ func cmdRun(args []string) error {
 		},
 		OnText: func(peer, text string) {
 			platform.Notify(platform.Notif{
-				Title: "Columba 收到文本",
-				Body:  "来自 " + peer + "：" + firstChars(text, 40),
+				Title:   "Columba 收到文本",
+				Body:    "来自 " + peer + "：" + firstChars(text, 40),
+				OpenURL: "drop:panel",
 			})
 		},
 	})
@@ -178,16 +179,23 @@ func cmdRun(args []string) error {
 	recv.SetAnnouncer(disc)
 	s.NotifyFile = func(dir, peer, name string) {
 		if dir == "send" {
-			platform.Notify(platform.Notif{Title: "Columba", Body: name + " 已发送到 " + peer})
+			// OpenURL：点通知本体打开管理面板（此前点了没反应）
+			platform.Notify(platform.Notif{
+				Title: "Columba", Body: name + " 已发送到 " + peer,
+				OpenURL: "drop:panel",
+			})
 		}
 	}
 	s.NotifyText = func(dir, peer, text string) {
 		if dir == "send" {
-			platform.Notify(platform.Notif{Title: "Columba", Body: "文本已发送到 " + peer})
+			platform.Notify(platform.Notif{
+				Title: "Columba", Body: "文本已发送到 " + peer,
+				OpenURL: "drop:panel",
+			})
 		}
 	}
 	s.NotifyErr = func(title, msg string) {
-		platform.Notify(platform.Notif{Title: title, Body: msg})
+		platform.Notify(platform.Notif{Title: title, Body: msg, OpenURL: "drop:panel"})
 	}
 	s.OnDeviceRemoved = func(display string) { platform.RemoveSendToLink(display) }
 

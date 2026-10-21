@@ -32,18 +32,61 @@ import (
 	"drop/core/transfer"
 )
 
-// 通知归属 AUMID：借用 PowerShell 的 AppID，保证未注册自有 AUMID 时
-// 通知也能可靠弹出（横幅标注为 PowerShell，M3 再优化）。
-const toastAppID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
+// 通知归属 AUMID（App User Model ID）。
+//
+// 自有 AUMID 需要在 HKCU\Software\Classes\AppUserModelId\<ID> 下注册 DisplayName，
+// 系统才会把横幅来源显示成这个名字（见 ensureToastAUMID）。注册失败时回退到
+// 借用 PowerShell 的 AppID——宁可来源名显示错，也不能让通知弹不出来。
+const (
+	ownAUMID = "Faumulant.Columba"
+	// 回退用的 PowerShell AppID（未注册自有 AUMID 时的保底）
+	fallbackAUMID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
+)
 
 var xmlEsc = strings.NewReplacer(
 	"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;",
 )
 
+// toastAppID 返回当前生效的 AUMID。注册只在首次调用时做一次（sync.Once）：
+// 每条通知都写注册表既慢又无意义。
+func toastAppID() string {
+	aumidOnce.Do(func() {
+		aumidErr = ensureToastAUMID()
+	})
+	if aumidErr == nil {
+		return ownAUMID
+	}
+	return fallbackAUMID
+}
+
+var (
+	aumidOnce sync.Once
+	aumidErr  error
+)
+
+// ensureToastAUMID 在 HKCU 注册自有 AUMID 的显示名。
+//
+// 实测结论（2026-10-21）：只要 HKCU\Software\Classes\AppUserModelId\<ID> 下
+// 有 DisplayName，CreateToastNotifier(ID) 的 Setting 即为 Enabled、横幅来源
+// 显示该名字；**不需要**再建带 AUMID 的开始菜单快捷方式（那是打包应用的常规
+// 做法，对免安装 exe 非必需，而设 lnk 的 AppUserModelID 需 IShellLinkW +
+// IPropertyStore 的 COM 调用，在本项目里得不偿失）。
+func ensureToastAUMID() error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER,
+		`Software\Classes\AppUserModelId\`+ownAUMID, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetStringValue("DisplayName", "Columba（飞鸠）")
+}
+
 // Notify 弹出系统 toast 通知（含按钮）。
 func Notify(n Notif) error {
-	launch := ""
-	if len(n.Actions) > 0 {
+	// 点击通知本体（非按钮）时的目标：优先 OpenURL，否则沿用第一个按钮的 URL
+	// （保持原有「点通知等于点第一个按钮」的语义）。
+	launch := n.OpenURL
+	if launch == "" && len(n.Actions) > 0 {
 		launch = n.Actions[0].URL
 	}
 	var b strings.Builder
@@ -64,7 +107,7 @@ func Notify(n Notif) error {
 $x = New-Object Windows.Data.Xml.Dom.XmlDocument
 $x.LoadXml('` + b.String() + `')
 $t = [Windows.UI.Notifications.ToastNotification]::new($x)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('` + toastAppID + `').Show($t)`
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('` + toastAppID() + `').Show($t)`
 	return runHiddenPowerShell(script, 15*time.Second)
 }
 
