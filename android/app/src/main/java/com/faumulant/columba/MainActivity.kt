@@ -147,14 +147,23 @@ class MainActivity : ComponentActivity() {
         Receiver.foregroundActive = true
         val s = AppSettings.load(this)
         if (s.persistent) {
+            // 常驻模式下也要起前台服务；但仅靠它不够（见下）
             Receiver.startPersistent(this)
-        } else {
-            // ensureStarted 内含 gomobile 同步调用（绑 socket/读信任库），
-            // 必须离开主线程（曾在 onStart 直接调用，冷启动卡顿源）
-            Bus.bg {
-                val err = Receiver.ensureStarted(this)
-                if (err != null) Bus.showSnackbar("接收端启动失败：$err")
-            }
+        }
+        // 无条件兜底启动接收端。
+        //
+        // 为什么 persistent 时也要调：前台服务被系统回收时 onDestroy 会停掉接收端，
+        // 而 Activity 一直活着、不会重新 onStart → 接收端永久停摆。真机实测表现是
+        // 「开关为开、App 在前台 RESUMED，接收端却没监听 42707」：信标灰、桌面端
+        // 显示离线、对端发文件收不到，用户完全看不出哪里不对。
+        //
+        // 重复启动是安全的：服务已在跑时 Receiver.running=true，ensureStarted 直接
+        // 返回；@Synchronized 保证与服务的并发调用不会启动两次。
+        // ensureStarted 内含 gomobile 同步调用（绑 socket/读信任库），
+        // 必须离开主线程（曾在 onStart 直接调用，冷启动卡顿源）。
+        Bus.bg {
+            val err = Receiver.ensureStarted(this)
+            if (err != null) Bus.showSnackbar("接收端启动失败：$err")
         }
     }
 

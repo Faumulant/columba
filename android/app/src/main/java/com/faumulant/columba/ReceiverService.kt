@@ -27,9 +27,16 @@ class ReceiverService : Service() {
     }
 
     override fun onDestroy() {
-        // 仅在非常驻模式（被 stopPersistent 连带调用）时由 stop 收尾；
-        // 常驻模式下 onDestroy 意味着系统要回收，接收端一并停止
-        Receiver.stop(this)
+        // 只在「用户真的不想再接收了」时才停接收端：
+        // - 非常驻模式（stopPersistent 连带调用）：停
+        // - 常驻模式但 App 已不在前台（系统回收服务、用户划掉任务）：停
+        // - 常驻模式且 App 仍在前台：**不停**。服务被系统回收是常见的，而 Activity
+        //   还活着不会重新 onStart；若在这里停掉接收端，就会进入「App 在前台、
+        //   信标灰、对端收不到」的死状态（真机实测过）。接收端由 MainActivity.onStart
+        //   兜底启动，服务回来时 ensureStarted 也因 running=true 直接返回。
+        val stillForeground = Receiver.foregroundActive() &&
+            AppSettings.load(this).persistent
+        if (!stillForeground) Receiver.stop(this)
         // 显式移除前台通知：个别 ROM（荣耀实测）在服务销毁后会把通知留在
         // 通知栏，用户看到"正在等待接收"但其实已经停了
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
