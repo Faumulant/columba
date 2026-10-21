@@ -11,7 +11,8 @@ const vm = require("vm");
 const BG = path.join(__dirname, "..", "extension", "chromium", "background.js");
 
 // ─── 假 chrome / daemon ────────────────────────────────────
-function makeEnv(state) {
+function makeEnv(state, opts) {
+  opts = opts || {};
   const menus = [];
   const listeners = {};
   const created = [];
@@ -53,6 +54,8 @@ function makeEnv(state) {
   const sentURLs = [];
   function handle(req) {
     if (req.path === "/api/state") {
+      // daemonDown：模拟后台没在跑（native host 连不上 → ok=false 无 data）
+      if (opts.daemonDown) return { ok: false, message: "无法连接 Columba 后台" };
       return { ok: true, data: { devices: state.devices, target: state.target } };
     }
     if (req.path === "/api/select") {
@@ -70,7 +73,8 @@ function makeEnv(state) {
     return { ok: false, message: "unknown" };
   }
 
-  const sandbox = { chrome, console, setTimeout, Promise, String };
+  // 定时刷新菜单用 setInterval；测试里给个空实现，避免进程挂住不退出
+  const sandbox = { chrome, console, setTimeout, setInterval: () => 0, Promise, String };
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(BG, "utf8"), sandbox, { filename: BG });
 
@@ -108,8 +112,13 @@ async function run() {
     check("文字类三项都在", ["page", "sel", "link"].every(i => ids.includes(i)));
     check("媒体本体两项都在", ["img", "video"].every(i => ids.includes(i)));
     check("「只发链接」备选也在", ["imgurl", "videourl"].every(i => ids.includes(i)));
-    check("单设备不出现「发送到…」", !ids.includes("pick"));
-    check("单设备不出现设备子项", !ids.some(i => String(i).startsWith("dev:")));
+    // 单设备也必须能看见「发送到…」并确认当前目标——早期版本单设备时藏起来，
+    // 扩展里找不到选择设备的东西，那正是这个错误。
+    check("单设备也显示「发送到…」", ids.includes("pick"));
+    check("单设备也列出设备项", ids.includes("dev:AAA"));
+    const devItem = env.created.find(m => m.id === "dev:AAA");
+    check("当前目标用 radio 勾选", devItem.type === "radio" && devItem.checked === true,
+      JSON.stringify({ type: devItem.type, checked: devItem.checked }));
 
     // 菜单文案不能说「发到某分类」，要说「发什么」（此处曾出现误解）
     const titles = env.created.map(m => m.title || "");
@@ -168,6 +177,33 @@ async function run() {
     await tick();
     const root = env.created.find(m => m.id === "root");
     check("标题提示未选择", root.title.includes("未选择"), root.title);
+  }
+
+  // 场景 3.5：没有配对设备 —— 菜单要给出可执行的说明，不能是空子菜单
+  {
+    console.log("无设备：");
+    const state = { devices: [], target: "" };
+    const env = makeEnv(state);
+    env.listeners.installed();
+    await tick();
+    const ids = env.created.map(m => m.id);
+    check("无设备仍有「发送到…」", ids.includes("pick"));
+    const noop = env.created.find(m => m.id === "noop");
+    check("给出禁用提示项", !!noop && noop.enabled === false);
+    check("提示指向面板添加设备", !!noop && noop.title.includes("面板"), noop && noop.title);
+  }
+
+  // 场景 3.6：daemon 未运行 —— 标题要说明「后台未运行」，
+  // 而不是假装「未选择设备」（后者会让用户去面板里白找一圈）
+  {
+    console.log("后台未运行：");
+    const env = makeEnv({ devices: [], target: "" }, { daemonDown: true });
+    env.listeners.installed();
+    await tick();
+    const root = env.created.find(m => m.id === "root");
+    check("标题说明后台未运行", root.title.includes("后台未运行"), root.title);
+    const noop = env.created.find(m => m.id === "noop");
+    check("提示指向启动后台", !!noop && noop.title.includes("后台"), noop && noop.title);
   }
 
   // 场景 4：点根菜单/发送到…（非动作项）不应发消息

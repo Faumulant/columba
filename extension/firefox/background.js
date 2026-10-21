@@ -80,7 +80,12 @@ async function rebuildMenus() {
   const data = st && st.ok && st.data ? st.data : null;
   const devices = (data && data.devices) || [];
   const targetId = (data && data.target) || "";
-  const targetName = (devices.find(d => d.id === targetId) || {}).name || "（未选择设备）";
+  // daemon 没起来时 devices 为空：标题要说明「后台未运行」，而不是假装
+  // 「未选择设备」——后者会让用户去面板里找设备，而真正的问题是后台没开。
+  const daemonUp = !!(st && st.ok);
+  const targetName = daemonUp
+    ? ((devices.find(d => d.id === targetId) || {}).name || "（未选择设备）")
+    : "（后台未运行）";
 
   await chrome.contextMenus.removeAll();
 
@@ -98,22 +103,48 @@ async function rebuildMenus() {
   chrome.contextMenus.create({ id: "imgurl", title: "只发送图片链接", parentId: MENU_ROOT, contexts: ["image"] });
   chrome.contextMenus.create({ id: "videourl", title: "只发送视频链接", parentId: MENU_ROOT, contexts: ["video", "audio"] });
 
-  // 多设备才给「发送到…」子菜单：单设备时多一层点选纯属负担
-  if (devices.length > 1) {
-    chrome.contextMenus.create({ id: "pick", title: "发送到…", parentId: MENU_ROOT, contexts: CTX });
-    for (const d of devices) {
-      chrome.contextMenus.create({
-        id: "dev:" + d.id,
-        title: d.name + (d.online ? "" : "（离线）"),
-        parentId: "pick",
-        contexts: CTX,
-      });
-    }
+  // 「发送到…」**始终显示**，即使只有一台设备。
+  //
+  // 早期版本只在多设备时显示，理由是「单设备多一层点选是负担」——这是错的：
+  //   · 用户无法确认当前发往谁、也无法切换，而这是最基本的心智模型；
+  //   · 配了第二台设备后菜单会突然多出一项，显得很莫名；
+  //   · 「发送到…」本身就是「发现设备」的地方，藏起来等于让人找不到。
+  // 单设备时它只多一层、内容一项，成本远小于「看不见自己在发给谁」。
+  chrome.contextMenus.create({ id: "pick", title: "发送到…", parentId: MENU_ROOT, contexts: CTX });
+  if (devices.length === 0) {
+    chrome.contextMenus.create({
+      id: "noop",
+      title: daemonUp ? "（还没有配对设备，先在面板里添加）" : "（Columba 后台没在运行）",
+      parentId: "pick",
+      enabled: false,
+      contexts: CTX,
+    });
+  }
+  for (const d of devices) {
+    const isCur = d.id === targetId;
+    chrome.contextMenus.create({
+      id: "dev:" + d.id,
+      // 当前目标打勾（radio 让选中态由浏览器原生渲染，比手写 ✓ 更清楚）
+      type: "radio",
+      checked: isCur,
+      title: d.name + (d.online ? "" : "（离线）"),
+      parentId: "pick",
+      contexts: CTX,
+    });
   }
 }
 
 chrome.runtime.onInstalled.addListener(() => { rebuildMenus(); });
 chrome.runtime.onStartup.addListener(() => { rebuildMenus(); });
+
+// MV3 的 service worker 会休眠，而菜单是「一次建好就常驻」的静态结构。
+// 期间设备可能增减、目标可能被面板改掉、daemon 可能重启，菜单就过期了。
+//
+// 刷新策略：定时 + 每次点击后。定时器在 worker 休眠时会被挂起，所以不能只靠它；
+// 每次点击动作完成后再刷一次，保证「下一次右键」看到的是最新状态。
+// 不用 chrome.alarms：它需要 alarms 权限，而 30 秒的精度对菜单足够，
+// 且多一个权限对用户是多一份疑虑。
+setInterval(() => { rebuildMenus(); }, 30000);
 
 // ─── 点击处理 ────────────────────────────────────────────────
 
@@ -122,35 +153,42 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
   // 设备子菜单：切换 daemon 的当前目标，并立刻重建菜单让标题跟着变
   if (id.startsWith("dev:")) {
-    await send({ path: "/api/select", method: "POST", body: { id: id.slice(4) } });
+    const r = await send({ path: "/api/select", method: "POST", body: { id: id.slice(4) } });
     await rebuildMenus();
-    badge("已切换");
+    badge(r && r.ok ? "已切换" : "失败");
     return;
   }
 
   switch (id) {
     // 文字类
     case "page":
-      return doText(info.pageUrl);
+      return finish(doText(info.pageUrl));
     case "sel":
-      return doText((info.selectionText || "").trim());
+      return finish(doText((info.selectionText || "").trim()));
     case "link":
-      return doText(info.linkUrl);
+      return finish(doText(info.linkUrl));
     case "imgurl":
-      return doText(info.srcUrl);
+      return finish(doText(info.srcUrl));
     case "videourl":
-      return doText(info.srcUrl || info.frameUrl || "");
+      return finish(doText(info.srcUrl || info.frameUrl || ""));
 
     // 媒体本体
     case "img":
-      return doFile(info.srcUrl, "image");
+      return finish(doFile(info.srcUrl, "image"));
     case "video":
-      return doFile(info.srcUrl || info.frameUrl || "", "video");
+      return finish(doFile(info.srcUrl || info.frameUrl || "", "video"));
 
     default:
-      return; // root / pick 等非动作项
+      return; // root / pick / noop 等非动作项
   }
 });
+
+// finish 动作结束后刷一次菜单：用户可能在面板里换了目标、或刚配对完新设备，
+// 下一次右键应当看到最新状态。失败不影响已完成的发送。
+async function finish(promise) {
+  await promise;
+  try { await rebuildMenus(); } catch (_) {}
+}
 
 async function doText(text) {
   if (!text) { badge("无内容"); return; }
