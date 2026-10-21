@@ -537,6 +537,7 @@ function renderSet(m) {
      <div class="bname">Edge · Chrome</div>
      <button class="btn pri" onclick="event.stopPropagation();revealExt()">打开目录</button>
     </div>
+   </div>
    <h2>关于</h2>
    <div class="setcard">
     <div class="setrow"><span class="k">Columba（飞鸠）· v${S.version || "0.1"}</span>
@@ -670,8 +671,14 @@ function helpShow(b) {
       "<p>2. 浏览器扩展页（edge://extensions 或 chrome://extensions）开启<b>开发者模式</b>。</p>" +
       "<p>3. 点「加载已解压的扩展程序」→ 选择该目录。</p>" +
       "<p>4. 更新代码后回到扩展页点刷新即可。</p>" +
-      "<p>使用：网页里右键 → Drop → 发送页面 / 选中文本 / 链接 / 图片 / 视频。" +
-      "菜单标题会显示当前目标设备；有多台设备时还会出现「发送到…」子菜单。</p>"}
+      "<p><b>用法</b>：网页里右键 → Drop → 发送此内容。<br>" +
+      "发什么由你右键的位置决定，不用自己选：<br>" +
+      "· 在图片/视频上右键 → 下载本体传文件（抓不到就自动改发链接）<br>" +
+      "· 选中文字后右键 → 发送选中文字<br>" +
+      "· 在链接上右键 → 发送链接地址<br>" +
+      "· 在空白处右键 → 发送当前页面地址</p>" +
+      "<p>菜单标题显示当前发给哪台设备；多台设备时用「发送到…」切换。</p>" +
+      "<p>收到的文件按<b>扩展名自动分类</b>（图片/视频/音频/文本/文件），无需手动选择。</p>"}
   }[b];
   document.getElementById("helpTitle").textContent = H.t;
   document.getElementById("helpBody").innerHTML = H.c;
@@ -818,6 +825,10 @@ refresh();
 setInterval(refresh, 3000);
 const hq = new URLSearchParams(location.search).get("help");
 if (hq) setTimeout(() => helpShow(hq), 400);
+// ?view=set 直接进设置页：调试与文档截图用，也方便用户把面板地址做成书签直达设置
+if (new URLSearchParams(location.search).get("view") === "set") {
+  setTimeout(() => { view = "set"; render(); }, 200);
+}
 </script>
 </body>
 </html>

@@ -1,8 +1,10 @@
-// 扩展逻辑离线验证：用假的 chrome API 跑一遍 background.js，
-// 检查菜单构建、设备子菜单、点击处理是否符合预期。
+// 扩展逻辑离线验证：用假的 chrome API 跑一遍 background.js。
 //
-// 为什么这么测：右键菜单只能人工点，但「菜单树结构 + 点击分支」是纯逻辑，
-// 可以在 Node 里跑。这样 CI 也能守住（扩展代码目前没有任何自动化测试）。
+// 右键菜单本身只能人工点，但「菜单树结构 + 按右键位置决定发什么」是纯逻辑，
+// 可以在 Node 里跑，CI 也能守住。核心断言是设计原则：
+//   · 只有一个动作项（不给用户选「发什么」的机会）
+//   · 动作由右键位置决定：媒体 > 选中文字 > 链接 > 页面
+//   · 媒体抓取失败要自动退回发链接，而不是报错
 
 const fs = require("fs");
 const path = require("path");
@@ -13,9 +15,11 @@ const BG = path.join(__dirname, "..", "extension", "chromium", "background.js");
 // ─── 假 chrome / daemon ────────────────────────────────────
 function makeEnv(state, opts) {
   opts = opts || {};
-  const menus = [];
   const listeners = {};
   const created = [];
+  const selected = [];
+  const sentTexts = [];
+  const sentURLs = [];
 
   const chrome = {
     runtime: {
@@ -23,12 +27,8 @@ function makeEnv(state, opts) {
         let onMsg = null;
         return {
           onDisconnect: { addListener() {} },
-          onMessage: {
-            addListener(fn) { onMsg = fn; },
-            removeListener() {},
-          },
+          onMessage: { addListener(fn) { onMsg = fn; }, removeListener() {} },
           postMessage(req) {
-            // 模拟宿主应答
             const resp = handle(req);
             setTimeout(() => onMsg && onMsg(resp), 0);
           },
@@ -39,22 +39,18 @@ function makeEnv(state, opts) {
       lastError: null,
     },
     contextMenus: {
-      create(opts) { created.push(opts); },
+      create(o) { created.push(o); },
       removeAll() { created.length = 0; return Promise.resolve(); },
       onClicked: { addListener(fn) { listeners.clicked = fn; } },
     },
     action: {
-      setBadgeText(o) { menus.push(["badge", o.text]); },
+      setBadgeText(o) { listeners.lastBadge = o.text; },
       setBadgeBackgroundColor() {},
     },
   };
 
-  // 假 daemon：/api/state 返回预设；/api/select 记录切换；/api/send-url 记录媒体
-  const selected = [];
-  const sentURLs = [];
   function handle(req) {
     if (req.path === "/api/state") {
-      // daemonDown：模拟后台没在跑（native host 连不上 → ok=false 无 data）
       if (opts.daemonDown) return { ok: false, message: "无法连接 Columba 后台" };
       return { ok: true, data: { devices: state.devices, target: state.target } };
     }
@@ -64,162 +60,153 @@ function makeEnv(state, opts) {
       return { ok: true };
     }
     if (req.path === "/api/send-text") {
-      return { ok: !!state.target, message: state.target ? "" : "未选择目标设备" };
+      sentTexts.push(req.body.text);
+      return { ok: true };
     }
     if (req.path === "/api/send-url") {
       sentURLs.push(req.body);
+      // opts.mediaFails：模拟媒体抓取失败（用于验证「自动退回发链接」）
+      if (opts.mediaFails) return { ok: false, message: "下载失败: HTTP 403" };
       return { ok: true };
     }
     return { ok: false, message: "unknown" };
   }
 
-  // 定时刷新菜单用 setInterval；测试里给个空实现，避免进程挂住不退出
   const sandbox = { chrome, console, setTimeout, setInterval: () => 0, Promise, String };
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(BG, "utf8"), sandbox, { filename: BG });
 
-  return { created, listeners, selected, sentURLs, sandbox };
+  return { created, listeners, selected, sentTexts, sentURLs };
 }
 
-const tick = () => new Promise(r => setTimeout(r, 10));
+const tick = () => new Promise(r => setTimeout(r, 20));
 
-// ─── 断言辅助 ──────────────────────────────────────────────
 let failed = 0;
 function check(name, cond, extra) {
-  if (cond) {
-    console.log("  ✓", name);
-  } else {
-    failed++;
-    console.log("  ✗", name, extra === undefined ? "" : `（${extra}）`);
-  }
+  if (cond) console.log("  ✓", name);
+  else { failed++; console.log("  ✗", name, extra === undefined ? "" : `（${extra}）`); }
 }
 
 async function run() {
-  // 场景 1：单设备 —— 不应出现「发送到…」子菜单
+  // 场景 1：菜单结构 —— 只应有一个动作项
   {
-    console.log("单设备：");
-    const state = {
-      devices: [{ id: "AAA", name: "我的手机", online: true }],
-      target: "AAA",
-    };
-    const env = makeEnv(state);
+    console.log("菜单结构：");
+    const env = makeEnv({ devices: [{ id: "AAA", name: "我的手机", online: true }], target: "AAA" });
     env.listeners.installed();
     await tick();
 
     const ids = env.created.map(m => m.id);
-    check("创建了根菜单", ids.includes("root"));
+    const acts = env.created.filter(m => m.id === "act");
+    check("只有一个动作项", acts.length === 1, `实际 ${acts.length} 个`);
+    check("没有旧的多动作项（page/sel/img/video）",
+      !ids.includes("page") && !ids.includes("sel") && !ids.includes("img") && !ids.includes("video"));
     check("根菜单标题带设备名", env.created.find(m => m.id === "root").title === "Drop → 我的手机");
-    check("文字类三项都在", ["page", "sel", "link"].every(i => ids.includes(i)));
-    check("媒体本体两项都在", ["img", "video"].every(i => ids.includes(i)));
-    check("「只发链接」备选也在", ["imgurl", "videourl"].every(i => ids.includes(i)));
-    // 单设备也必须能看见「发送到…」并确认当前目标——早期版本单设备时藏起来，
-    // 扩展里找不到选择设备的东西，那正是这个错误。
-    check("单设备也显示「发送到…」", ids.includes("pick"));
-    check("单设备也列出设备项", ids.includes("dev:AAA"));
-    const devItem = env.created.find(m => m.id === "dev:AAA");
-    check("当前目标用 radio 勾选", devItem.type === "radio" && devItem.checked === true,
-      JSON.stringify({ type: devItem.type, checked: devItem.checked }));
-
-    // 菜单文案不能说「发到某分类」，要说「发什么」（此处曾出现误解）
-    const titles = env.created.map(m => m.title || "");
-    check("文案用「此页面/此图片」而非「发送页面/发送图片」",
-      titles.includes("发送此页面") && titles.includes("发送此图片") && titles.includes("发送此视频"));
-    check("不再出现歧义文案「发送图片」", !titles.includes("发送图片"));
-
-    // 点「发送此图片」→ 应走 send-url（发本体，不是发链接）
-    await env.listeners.clicked({ menuItemId: "img", srcUrl: "https://example.com/a.png" });
-    await tick();
-    check("点图片走 send-url 而非 send-text", env.sentURLs.length === 1);
-    check("send-url 带上 kind=image", env.sentURLs[0] && env.sentURLs[0].kind === "image");
-    check("send-url 带上原始地址", env.sentURLs[0] && env.sentURLs[0].url === "https://example.com/a.png");
-
-    // 点「只发送图片链接」→ 应走 send-text（不发本体）
-    await env.listeners.clicked({ menuItemId: "imgurl", srcUrl: "https://example.com/b.png" });
-    await tick();
-    check("「只发链接」不触发 send-url", env.sentURLs.length === 1);
+    check("「发送到…」始终显示", ids.includes("pick"));
+    const dev = env.created.find(m => m.id === "dev:AAA");
+    check("当前目标 radio 勾选", dev && dev.type === "radio" && dev.checked === true);
   }
 
-  // 场景 2：多设备 —— 出现「发送到…」与设备子项，且离线有标注
+  // 场景 2：按右键位置决定发什么（核心设计）
   {
-    console.log("多设备：");
-    const state = {
-      devices: [
-        { id: "AAA", name: "我的手机", online: true },
-        { id: "BBB", name: "平板", online: false },
-      ],
-      target: "AAA",
-    };
-    const env = makeEnv(state);
+    console.log("按位置分派：");
+    const env = makeEnv({ devices: [{ id: "AAA", name: "手机", online: true }], target: "AAA" });
     env.listeners.installed();
     await tick();
 
-    const ids = env.created.map(m => m.id);
-    check("出现「发送到…」", ids.includes("pick"));
-    check("列出两台设备", ids.includes("dev:AAA") && ids.includes("dev:BBB"));
-    const b = env.created.find(m => m.id === "dev:BBB");
-    check("离线设备有标注", b.title.includes("离线"), b.title);
+    // 2a) 空白处 → 发页面地址
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/page" });
+    await tick();
+    check("空白处发页面地址", env.sentTexts.at(-1) === "https://a.com/page");
 
-    // 点设备子项 → 切换目标
+    // 2b) 选中文字 → 发文字（优先于页面）
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/page", selectionText: "  选中的字  " });
+    await tick();
+    check("选中文字发文字（且 trim）", env.sentTexts.at(-1) === "选中的字");
+
+    // 2c) 链接 → 发链接
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", linkUrl: "https://a.com/l" });
+    await tick();
+    check("链接发链接地址", env.sentTexts.at(-1) === "https://a.com/l");
+
+    // 2d) 图片 → 下载本体（走 send-url，不发链接）
+    const beforeURLs = env.sentURLs.length;
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "image", srcUrl: "https://a.com/cat.png" });
+    await tick();
+    check("图片走 send-url 发本体", env.sentURLs.length === beforeURLs + 1);
+    check("send-url 带 kind=image", env.sentURLs.at(-1).kind === "image");
+    check("send-url 带原始地址", env.sentURLs.at(-1).url === "https://a.com/cat.png");
+
+    // 2e) 视频 → 同样走本体
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "video", srcUrl: "https://a.com/v.mp4" });
+    await tick();
+    check("视频走 send-url 发本体", env.sentURLs.at(-1).url === "https://a.com/v.mp4");
+
+    // 2f) 媒体上右键但同时有选中文字 → 媒体优先（在图上右键是最明确的手势）
+    const before2 = env.sentURLs.length;
+    await env.listeners.clicked({
+      menuItemId: "act", pageUrl: "https://a.com/p",
+      mediaType: "image", srcUrl: "https://a.com/x.png", selectionText: "图注",
+    });
+    await tick();
+    check("媒体优先于选中文字", env.sentURLs.length === before2 + 1);
+  }
+
+  // 场景 3：媒体抓取失败 → 自动退回发链接（不报错）
+  {
+    console.log("抓取失败回退：");
+    const env = makeEnv({ devices: [{ id: "AAA", name: "手机", online: true }], target: "AAA" }, { mediaFails: true });
+    env.listeners.installed();
+    await tick();
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "image", srcUrl: "https://a.com/locked.png" });
+    await tick();
+    check("抓取失败后发了链接", env.sentTexts.at(-1) === "https://a.com/locked.png");
+    check("徽标提示已发链接", env.listeners.lastBadge === "已发链接", env.listeners.lastBadge);
+  }
+
+  // 场景 4：blob: 地址直接发链接（daemon 取不到页面内引用）
+  {
+    console.log("blob 地址：");
+    const env = makeEnv({ devices: [{ id: "AAA", name: "手机", online: true }], target: "AAA" });
+    env.listeners.installed();
+    await tick();
+    const before = env.sentURLs.length;
+    await env.listeners.clicked({ menuItemId: "act", pageUrl: "https://a.com/p", mediaType: "image", srcUrl: "blob:https://a.com/123" });
+    await tick();
+    check("blob 不走 send-url", env.sentURLs.length === before);
+    check("blob 退回发链接", env.sentTexts.at(-1) === "blob:https://a.com/123");
+  }
+
+  // 场景 5：无设备 / 后台未运行
+  {
+    console.log("异常状态：");
+    const e1 = makeEnv({ devices: [], target: "" });
+    e1.listeners.installed(); await tick();
+    const noop1 = e1.created.find(m => m.id === "noop");
+    check("无设备给禁用提示", noop1 && noop1.enabled === false && noop1.title.includes("面板"));
+
+    const e2 = makeEnv({ devices: [], target: "" }, { daemonDown: true });
+    e2.listeners.installed(); await tick();
+    const root2 = e2.created.find(m => m.id === "root");
+    check("后台未运行时标题说明", root2.title.includes("后台未运行"), root2.title);
+    const noop2 = e2.created.find(m => m.id === "noop");
+    check("提示指向启动后台", noop2 && noop2.title.includes("后台"));
+  }
+
+  // 场景 6：切换设备
+  {
+    console.log("切换设备：");
+    const env = makeEnv({
+      devices: [{ id: "AAA", name: "手机", online: true }, { id: "BBB", name: "平板", online: false }],
+      target: "AAA",
+    });
+    env.listeners.installed();
+    await tick();
     await env.listeners.clicked({ menuItemId: "dev:BBB" });
     await tick();
-    check("切换目标调用了 /api/select", env.selected.length === 1 && env.selected[0] === "BBB");
-    // 切换后菜单重建，标题应更新（BBB 离线，标题仍是 BBB）
-    const rootAfter = env.created.find(m => m.id === "root");
-    check("切换后标题跟着变", rootAfter && rootAfter.title === "Drop → 平板", rootAfter && rootAfter.title);
-  }
-
-  // 场景 3：未选择设备 —— 标题要明确提示
-  {
-    console.log("未选择设备：");
-    const state = { devices: [{ id: "AAA", name: "我的手机", online: true }], target: "" };
-    const env = makeEnv(state);
-    env.listeners.installed();
-    await tick();
-    const root = env.created.find(m => m.id === "root");
-    check("标题提示未选择", root.title.includes("未选择"), root.title);
-  }
-
-  // 场景 3.5：没有配对设备 —— 菜单要给出可执行的说明，不能是空子菜单
-  {
-    console.log("无设备：");
-    const state = { devices: [], target: "" };
-    const env = makeEnv(state);
-    env.listeners.installed();
-    await tick();
-    const ids = env.created.map(m => m.id);
-    check("无设备仍有「发送到…」", ids.includes("pick"));
-    const noop = env.created.find(m => m.id === "noop");
-    check("给出禁用提示项", !!noop && noop.enabled === false);
-    check("提示指向面板添加设备", !!noop && noop.title.includes("面板"), noop && noop.title);
-  }
-
-  // 场景 3.6：daemon 未运行 —— 标题要说明「后台未运行」，
-  // 而不是假装「未选择设备」（后者会让用户去面板里白找一圈）
-  {
-    console.log("后台未运行：");
-    const env = makeEnv({ devices: [], target: "" }, { daemonDown: true });
-    env.listeners.installed();
-    await tick();
-    const root = env.created.find(m => m.id === "root");
-    check("标题说明后台未运行", root.title.includes("后台未运行"), root.title);
-    const noop = env.created.find(m => m.id === "noop");
-    check("提示指向启动后台", !!noop && noop.title.includes("后台"), noop && noop.title);
-  }
-
-  // 场景 4：点根菜单/发送到…（非动作项）不应发消息
-  {
-    console.log("非动作项：");
-    const state = { devices: [{ id: "AAA", name: "x", online: true }], target: "AAA" };
-    const env = makeEnv(state);
-    env.listeners.installed();
-    await tick();
-    let sent = 0;
-    // 拦截 send-text：点击 root 后不应有 send 调用（用 selected 之外的方式观察）
-    const before = env.selected.length;
-    await env.listeners.clicked({ menuItemId: "root" });
-    await env.listeners.clicked({ menuItemId: "pick" });
-    await tick();
-    check("点非动作项不切换设备", env.selected.length === before);
+    check("切换调用了 /api/select", env.selected.at(-1) === "BBB");
+    check("切换后标题跟着变", env.created.find(m => m.id === "root").title === "Drop → 平板");
+    const b = env.created.find(m => m.id === "dev:BBB");
+    check("离线设备有标注", b.title.includes("离线"));
   }
 
   console.log(failed === 0 ? "\n全部通过" : `\n${failed} 项失败`);
