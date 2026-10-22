@@ -145,14 +145,19 @@ func runHiddenPowerShellCapture(script string, timeout time.Duration) (string, e
 		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	s := strings.TrimSpace(string(out))
-	// 兜底：万一 CLIXML 仍混进来，只取最后一行的纯文本（脚本都用单行输出）
+	// 兜底：万一 CLIXML 仍混进来，剔除 CLIXML 相关的行，只留纯文本。
+	// 保留所有纯文本行（而非只取最后一行）——调用方可能输出多行标记，
+	// 只取最后一行会把需要的行丢掉。
 	if strings.Contains(s, "#< CLIXML") {
-		lines := strings.Split(s, "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			if ln := strings.TrimSpace(lines[i]); ln != "" && !strings.HasPrefix(ln, "#<") && !strings.HasPrefix(ln, "<") {
-				return ln, nil
+		var keep []string
+		for _, ln := range strings.Split(s, "\n") {
+			t := strings.TrimSpace(ln)
+			if t == "" || strings.HasPrefix(t, "#<") || strings.HasPrefix(t, "<") {
+				continue
 			}
+			keep = append(keep, t)
 		}
+		return strings.Join(keep, "\n"), nil
 	}
 	return s, nil
 }
@@ -245,6 +250,9 @@ func psQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
 // 图标落地为独立 .ico 再作 IconLocation：图标缓存绑定的是这个稳定文件，
 // 开发期反复覆盖 exe 不再导致桌面图标变空白（经典图标缓存失效）。
 // 已存在的快捷方式只更新图标，保留用户自己的目标配置。
+//
+// 桌面路径交给 PowerShell 解析（可能被 OneDrive 重定向），所以这里的
+// $final 由脚本自己算，saveShortcut 只负责 ASCII 临时名与改名。
 func EnsureDesktopShortcut() error {
 	exe := helperExe()
 	if exe == "" {
@@ -257,12 +265,14 @@ func EnsureDesktopShortcut() error {
 	if err := os.WriteFile(icoPath, dropIco, 0o644); err != nil {
 		return err
 	}
+	// 已存在的快捷方式只更新图标、保留用户自己的目标配置，所以这里先把既有
+	// .lnk 复制到临时名再改，而不是无条件重建。$tmp 位于 %TEMP% 根（ASCII），
+	// 因此复制与保存都不受代码页影响。
 	script := `
-$desktop = [Environment]::GetFolderPath('Desktop')
-$lnk = Join-Path $desktop 'Columba.lnk'
 $ws = New-Object -ComObject WScript.Shell
-$s = $ws.CreateShortcut($lnk)
-if (-not (Test-Path $lnk)) {
+if (Test-Path -LiteralPath $final) { Copy-Item -LiteralPath $final -Destination $tmp -Force }
+$s = $ws.CreateShortcut($tmp)
+if (-not (Test-Path -LiteralPath $final)) {
   $s.TargetPath = '` + psQuote(exe) + `'
   $s.Arguments = 'panel'
   $s.WorkingDirectory = '` + psQuote(filepath.Dir(exe)) + `'
@@ -271,7 +281,9 @@ if (-not (Test-Path $lnk)) {
 }
 $s.IconLocation = '` + psQuote(icoPath) + `,0'
 $s.Save()`
-	return runHiddenPowerShell(script, 20*time.Second)
+	return saveShortcut(
+		`(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Columba.lnk')`,
+		script)
 }
 
 // RemoveDesktopShortcut 移除桌面快捷方式与落地的图标文件（卸载用，幂等）。
@@ -306,29 +318,129 @@ func EnsureSendToLink(display, deviceID string) error {
 	}
 	script := `
 $ws = New-Object -ComObject WScript.Shell
-$s = $ws.CreateShortcut('` + psQuote(name) + `')
+$s = $ws.CreateShortcut($tmp)
 $s.TargetPath = '` + psQuote(exe) + `'
 $s.Arguments = 'sendto --to ` + psQuote(deviceID) + `'
 $s.WindowStyle = 7
 $s.Description = 'Drop'
 $s.Save()`
-	return runHiddenPowerShell(script, 20*time.Second)
+	return saveShortcut(`'`+psQuote(name)+`'`, script)
+}
+
+// saveShortcut 执行创建快捷方式的 PowerShell 脚本，规避系统代码页限制。
+//
+// WScript.Shell.CreateShortcut(...).Save() 写 .lnk 时走的是**系统 ANSI 代码页**，
+// 且对**整条路径**做转换——不只是文件名。实测（GBK 系统）：
+//
+//	中文设备名（GBK 可表示）           → 成功
+//	emoji / 韩文（GBK 不可表示）        → 静默失败
+//	ASCII 文件名 + 中文目录             → 静默失败（目录名被转换坏）
+//
+// 更糟的是失败**静默**：不创建文件、不抛异常，PowerShell 照常退出 0，
+// 调用方以为成功。
+//
+// 后果有两层：英文版 Windows（ANSI=1252）上中文设备名建不出来；而**中文用户名
+// 的机器**上，%APPDATA%\Microsoft\Windows\SendTo 这条路径本身含中文，连 ASCII
+// 设备名都会失败。用户右键菜单里看不到设备，也没有任何提示。
+//
+// 修法：临时 .lnk 建在 %TEMP% 根目录（整条路径纯 ASCII，Save 必然成功），
+// 再用 Move-Item 移到最终位置——Move 走 Win32 UTF-16 接口，不受代码页限制。
+// 之所以全在 PowerShell 内完成而不是回 Go 侧 os.Rename：桌面目录可能被
+// OneDrive 重定向，只有 [Environment]::GetFolderPath 取得准。
+//
+// 另加 Test-Path 断言：把「Save 静默失败」变成显式报错，避免同类问题再被
+// 误判成测试的环境问题。
+//
+// finalExpr 是求值为最终 .lnk 绝对路径的 PowerShell 表达式；
+// script 中通过 $tmp 引用临时路径（%TEMP% 根、纯 ASCII）。
+func saveShortcut(finalExpr, script string) error {
+	full := `
+$final = ` + finalExpr + `
+$tmp = Join-Path $env:TEMP '__columba_tmp.lnk'
+if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+` + script + `
+if (-not (Test-Path -LiteralPath $tmp)) {
+  throw '快捷方式未能创建（可能受系统代码页限制）'
+}
+if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Force }
+Move-Item -LiteralPath $tmp -Destination $final -Force`
+	return runHiddenPowerShell(full, 20*time.Second)
 }
 
 // sendToLinkMatches 检查既有 .lnk 的目标与参数是否仍指向当前 exe / 该设备。
 // 用 PowerShell 读（创建也走它，避免引入 COM 直调的另一套实现）。
 // 任何读取失败都按「不匹配」处理 → 走重建路径，宁可重写一次也不要留坏链接。
+//
+// 读取同样受 ANSI 代码页限制，且同样作用于**整条路径**：CreateShortcut(含
+// 非 ANSI 字符的路径) 不报错，只返回空对象，读到的 TargetPath/Arguments
+// 都是空串——于是「不匹配」判定成立，每次同步都白重建一遍。
+//
+// 绕法：把 .lnk 复制到 %TEMP% 根下的 ASCII 临时名再读。必须用 %TEMP% 根，
+// 不能放同目录——CreateShortcut 对整条路径做转换，同目录若含非 ANSI 字符
+// （中文用户名机器上的 SendTo 就是）依然读不到，只会得到空对象。
+// 输出带固定前缀，便于在 CLIXML 噪音里精确取回，不受行数影响。
 func sendToLinkMatches(lnk, wantExe, wantDeviceID string) bool {
 	script := `
-$ws = New-Object -ComObject WScript.Shell
-$s = $ws.CreateShortcut('` + psQuote(lnk) + `')
-Write-Output ($s.TargetPath + "|" + $s.Arguments)`
+$final = '` + psQuote(lnk) + `'
+$tmp = Join-Path $env:TEMP '__columba_read.lnk'
+if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+try {
+  Copy-Item -LiteralPath $final -Destination $tmp -Force -ErrorAction Stop
+  $ws = New-Object -ComObject WScript.Shell
+  $s = $ws.CreateShortcut($tmp)
+  Write-Output ('LNKDATA:' + $s.TargetPath + '|' + $s.Arguments)
+} catch {
+  Write-Output ('LNKERR:' + $_.Exception.Message)
+} finally {
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}`
 	out, err := runHiddenPowerShellCapture(script, 10*time.Second)
 	if err != nil {
 		return false
 	}
+	// 从输出里精确取 LNKDATA: 那一行，避免被 CLIXML 噪音或其他行干扰
+	data := ""
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "LNKDATA:") {
+			data = strings.TrimPrefix(line, "LNKDATA:")
+			break
+		}
+	}
+	if data == "" {
+		return false
+	}
+	// 比对前统一路径形式：PowerShell 回显的 TargetPath 可能是写入时的 8.3 短名
+	// （用户名超过 8 字符时，CI runner 上就是），而 wantExe 来自 os.Executable()
+	// 是长名。两者指向同一文件，但字符串不同，直接比较会永远判不匹配。
 	want := wantExe + `|sendto --to ` + wantDeviceID
-	return strings.EqualFold(strings.TrimSpace(out), want)
+	return strings.EqualFold(normalizeLnkData(data), normalizeLnkData(want))
+}
+
+// normalizeLnkData 把 "目标路径|参数" 里的目标路径展开为长名，消除 8.3 短名差异。
+// 展开失败时保留原值——宁可判不匹配走重建，也不要因为规范化出错而误判匹配。
+func normalizeLnkData(s string) string {
+	i := strings.LastIndex(s, "|sendto --to ")
+	if i < 0 {
+		return s
+	}
+	return longPath(s[:i]) + s[i:]
+}
+
+// longPath 用 GetLongPathNameW 把 8.3 短名（PROGRA~1 之类）展开为长名。
+// os.Executable() 返回长名，而 PowerShell 回显的 TargetPath 保留写入时的形式，
+// 两者指向同一文件但字符串不同，直接比较会永远判不匹配。
+func longPath(p string) string {
+	ptr, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return p
+	}
+	buf := make([]uint16, windows.MAX_PATH)
+	n, err := windows.GetLongPathName(ptr, &buf[0], uint32(len(buf)))
+	if err != nil || n == 0 || int(n) > len(buf) {
+		return p
+	}
+	return windows.UTF16ToString(buf[:n])
 }
 
 // RemoveSendToLink 移除设备的"发送到"快捷方式。
